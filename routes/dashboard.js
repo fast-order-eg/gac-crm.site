@@ -2269,13 +2269,15 @@ router.post('/customers/add', async (req, res) => {
         // Add notification if added by sales
         if (req.user.role === 'sales') {
             try {
-                await createNotification(
-                    ownerId,
-                    'system',
-                    'إضافة عميل يدوياً',
-                    `قام الموظف ${req.user.fullName || req.user.username} بإضافة عميل جديد يدوياً: ${customerName.trim()}`,
-                    `/dashboard/customers`
-                );
+                await createNotification({
+                    type: 'system',
+                    title: 'إضافة عميل يدوياً',
+                    message: `قام الموظف ${req.user.fullName || req.user.username} بإضافة عميل جديد يدوياً: ${customerName.trim()}`,
+                    targetUserId: ownerId,
+                    customerId: customer.id,
+                    ownerId: ownerId,
+                    io: req.app.get('socketio')
+                });
             } catch (notifErr) {
                 console.error('Error sending notification for add customer:', notifErr);
             }
@@ -2645,6 +2647,37 @@ router.post('/customers/update-notes', async (req, res) => {
             performedByUserId: req.user.id,
             ownerId: customer.UserId
         });
+
+        // إرسال إشعار عند تحديث الملاحظات
+        try {
+            const noteSnippet = (notes || '').substring(0, 80);
+            if (req.user.role === 'sales') {
+                const notifyAdmin = await getSetting('notify_admin_on_customer_notes', customer.UserId);
+                if (notifyAdmin === 'true' || notifyAdmin === true) {
+                    await createNotification({
+                        type: 'customer_note',
+                        title: `ملاحظة جديدة من ${req.user.fullName || req.user.username}`,
+                        message: `العميل "${customer.customerName || customer.phoneNumber}": ${noteSnippet}`,
+                        targetUserId: customer.UserId,
+                        customerId: customer.id,
+                        ownerId: customer.UserId,
+                        io: req.app.get('socketio')
+                    });
+                }
+            } else if (customer.assignedToUserId && customer.assignedToUserId !== req.user.id) {
+                await createNotification({
+                    type: 'customer_note',
+                    title: `ملاحظة جديدة من الإدارة`,
+                    message: `العميل "${customer.customerName || customer.phoneNumber}": ${noteSnippet}`,
+                    targetUserId: customer.assignedToUserId,
+                    customerId: customer.id,
+                    ownerId: customer.UserId,
+                    io: req.app.get('socketio')
+                });
+            }
+        } catch (notifErr) {
+            console.error('Error sending customer_note notification:', notifErr);
+        }
 
         res.json({ success: true });
     } catch (err) {
@@ -3366,17 +3399,117 @@ router.get('/finance/export', async (req, res) => {
 });
 
 // ==========================================
-// 🔔 روتات نظام الإشعارات الداخلية
+// 🔔 روتات نظام الإشعارات الداخلية والـ Web Push
 // ==========================================
 router.get('/notifications', async (req, res) => {
     try {
+        const { getEmployeesPushStatus, getVapidPublicKey } = await import('../services/webPushService.js');
+        const { getSetting } = await import('../services/settingsService.js');
+        const employeesPushStatus = await getEmployeesPushStatus(req.user.role, req.user.id);
+        const vapidPublicKey = getVapidPublicKey();
+        const notifyAdminOnNotes = await getSetting('notify_admin_on_customer_notes', req.user.id);
+
         res.render('notifications', {
             user: req.user,
-            page: 'notifications'
+            page: 'notifications',
+            employeesPushStatus,
+            vapidPublicKey,
+            notifyAdminOnNotes: notifyAdminOnNotes !== false
         });
     } catch (err) {
         console.error('Error rendering notifications page:', err);
         res.status(500).send('حدث خطأ أثناء تحميل صفحة الإشعارات.');
+    }
+});
+
+router.get('/push/public-key', async (req, res) => {
+    try {
+        const { getVapidPublicKey } = await import('../services/webPushService.js');
+        res.json({ success: true, publicKey: getVapidPublicKey() });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/push/subscribe', async (req, res) => {
+    try {
+        const { subscription } = req.body;
+        if (!subscription || !subscription.endpoint) {
+            return res.status(400).json({ success: false, error: 'بيانات الاشتراك غير صالحة' });
+        }
+        const userAgent = req.headers['user-agent'] || '';
+        const { saveSubscription } = await import('../services/webPushService.js');
+        const saved = await saveSubscription({
+            userId: req.user.id,
+            subscription,
+            userAgent
+        });
+        res.json({ success: true, message: 'تم تفعيل إشعارات هذا الجهاز بنجاح!', subscriptionId: saved.id });
+    } catch (err) {
+        console.error('Error subscribing to web push:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/push/unsubscribe', async (req, res) => {
+    try {
+        const { endpoint } = req.body;
+        const { removeSubscription } = await import('../services/webPushService.js');
+        await removeSubscription({ endpoint, userId: req.user.id });
+        res.json({ success: true, message: 'تم إلغاء تفعيل الإشعارات لهذا الجهاز.' });
+    } catch (err) {
+        console.error('Error unsubscribing web push:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/push/test', async (req, res) => {
+    try {
+        const targetUserId = (req.body.userId && (req.user.role === 'admin' || req.user.role === 'super_admin'))
+            ? parseInt(req.body.userId)
+            : req.user.id;
+
+        const { sendPushToUser } = await import('../services/webPushService.js');
+        const result = await sendPushToUser(targetUserId, {
+            title: '🔔 إشعار تجريبي من GAC CRM',
+            body: `مرحباً بك! إشعارات الويب بوش تعمل بنجاح على جهازك (حساب: ${req.user.fullName || req.user.username}).`,
+            icon: '/gac_crm_logo.png',
+            badge: '/gac_crm_logo.png',
+            data: { url: '/dashboard/notifications' }
+        });
+
+        if (result.sent === 0 && result.total === 0) {
+            return res.json({
+                success: false,
+                message: 'لا يوجد أي جهاز أو متصفح مفعّل لهذا المستخدم حالياً. يرجى تفعيل الإشعار أولاً من المتصفح أو الموبايل.'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `تم إرسال الإشعار التجريبي بنجاح إلى ${result.sent} جهاز.`,
+            result
+        });
+    } catch (err) {
+        console.error('Error sending test push:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+router.post('/push/test-subscription/:subId', async (req, res) => {
+    try {
+        const subId = parseInt(req.params.subId);
+        const { sendPushToSubscriptionId } = await import('../services/webPushService.js');
+        await sendPushToSubscriptionId(subId, {
+            title: '🔔 إشعار تجريبي لهذا الجهاز',
+            body: 'جهازك متصل ومستعد لاستقبال إشعارات الرسائل والعملاء الجدد في الخلفية.',
+            icon: '/gac_crm_logo.png',
+            badge: '/gac_crm_logo.png',
+            data: { url: '/dashboard/notifications' }
+        });
+        res.json({ success: true, message: 'تم إرسال الإشعار التجريبي للجهاز المحدد بنجاح!' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
@@ -3428,6 +3561,21 @@ router.post('/notifications/mark-read', async (req, res) => {
     } catch (err) {
         console.error('Error marking notification as read:', err);
         res.status(500).json({ success: false, error: 'حدث خطأ أثناء تحديث حالة الإشعار.' });
+    }
+});
+
+router.post('/notifications/toggle-notes-push', async (req, res) => {
+    try {
+        if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+            return res.status(403).json({ success: false, error: 'غير مصرح لك بتعديل هذا الإعداد' });
+        }
+        const { enabled } = req.body;
+        const { setSetting } = await import('../services/settingsService.js');
+        await setSetting('notify_admin_on_customer_notes', !!enabled, req.user.id);
+        res.json({ success: true, enabled: !!enabled });
+    } catch (err) {
+        console.error('Error toggling admin notes push setting:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

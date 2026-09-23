@@ -10,8 +10,10 @@ const Notification = sequelize.define('Notification', {
         autoIncrement: true
     },
     type: {
-        type: DataTypes.ENUM('customer_assigned', 'status_changed', 'payment_received', 'follow_up_due', 'system'),
-        allowNull: false
+        type: DataTypes.STRING(50),
+        allowNull: false,
+        defaultValue: 'system',
+        comment: 'customer_assigned, status_changed, payment_received, follow_up_due, system, customer_note, new_message'
     },
     title: {
         type: DataTypes.STRING,
@@ -29,7 +31,7 @@ const Notification = sequelize.define('Notification', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: 'Users',
+            model: 'users',
             key: 'id'
         },
         comment: 'الموظف المستهدف بالإشعار'
@@ -47,7 +49,7 @@ const Notification = sequelize.define('Notification', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: 'Users',
+            model: 'users',
             key: 'id'
         },
         comment: 'صاحب البوت (owner)'

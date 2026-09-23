@@ -36,6 +36,7 @@ import Product from './models/Product.js';
 import InteractiveButton from './models/InteractiveButton.js';
 import ChangeLog from './models/ChangeLog.js';
 import Notification from './models/Notification.js';
+import PushSubscription from './models/PushSubscription.js';
 import SystemSettings from './models/SystemSettings.js';
 import KPIRecord from './models/KPIRecord.js';
 import FinancialTransaction from './models/FinancialTransaction.js';
@@ -211,6 +212,14 @@ const dbPromise = syncDb ? sequelize.sync({ alter: true }) : sequelize.authentic
 
 dbPromise.then(async () => {
     console.log(syncDb ? 'Database synced (with alter)' : 'Database connected successfully.');
+
+    try {
+        await PushSubscription.sync();
+        await sequelize.query("ALTER TABLE notifications MODIFY COLUMN type VARCHAR(50) NOT NULL DEFAULT 'system'");
+        console.log('🔔 [WebPush] push_subscriptions table and notifications schema verified.');
+    } catch (schemaErr) {
+        console.warn('⚠️ [WebPush] Schema check note:', schemaErr.message);
+    }
 
     // Create Super Admin if not exists
     const adminExists = await User.findOne({ where: { role: 'super_admin' } });

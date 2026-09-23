@@ -1764,6 +1764,42 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         }
         // === End Early Debounce ===
 
+        // === 🔔 إرسال إشعار فوري (Web Push + Socket.IO) للموظف المسؤول عن العميل عند وصول رسالة جديدة ===
+        if (!remoteJid.endsWith('@g.us') && text) {
+            try {
+                const pushNameForNotif = msg.pushName || phoneNumber || (remoteJid.endsWith('@lid') ? 'عميل واتساب' : remoteJid.split('@')[0]);
+                const customerPhoneForNotif = phoneNumber || remoteJid.split('@')[0];
+                const [custRecord] = await Customer.findOrCreate({
+                    where: { UserId: userId, phoneNumber: customerPhoneForNotif },
+                    defaults: {
+                        customerName: pushNameForNotif,
+                        remoteJid: remoteJid,
+                        firstContactAt: new Date(),
+                        lastReplyAt: new Date(),
+                        status: 'new',
+                        UserId: userId
+                    }
+                });
+
+                const targetEmployeeId = custRecord.assignedToUserId || userId;
+                const previewText = text.length > 90 ? text.substring(0, 90) + '...' : text;
+                const displayCustomerName = custRecord.customerName || pushNameForNotif || customerPhoneForNotif;
+
+                await notificationService.createNotification({
+                    type: 'new_message',
+                    title: `💬 رسالة جديدة من: ${displayCustomerName}`,
+                    message: `${previewText}`,
+                    targetUserId: targetEmployeeId,
+                    customerId: custRecord.id,
+                    ownerId: userId,
+                    io
+                });
+            } catch (msgNotifErr) {
+                console.error('⚠️ [IncomingMsgNotification] Error notifying employee:', msgNotifErr.message);
+            }
+        }
+        // === End Incoming Message Notification ===
+
         // === Interactive Buttons: Check for trigger words ===
         if (text && !remoteJid.endsWith('@g.us') && user.bot_mode !== 'ai_only' && !user.buttons_disabled) {
             const normalizedText = text.trim().toLowerCase();
