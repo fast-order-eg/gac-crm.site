@@ -23,6 +23,7 @@ import * as notificationService from '../services/notificationService.js';
 import { Op, Sequelize } from 'sequelize';
 import { GoogleAuth } from 'google-auth-library';
 import { vertexQueue } from '../services/queueService.js';
+import { whatsappQueue } from '../services/whatsappQueueService.js';
 import { funnelDefaults } from '../config/funnelDefaults.js';
 import { getSetting as getSystemSetting } from '../services/settingsService.js';
 
@@ -46,15 +47,15 @@ const userHourlyMessageCount = new Map();
 const contactDebounceMap = new Map();
 
 // Helper: Calculate random delay based on text length to simulate human behavior
-function calculateHumanDelay(textLength, minSec = 3, maxSec = 7) {
-    const base = Math.random() * (5 - minSec) + minSec; // 3 to 5 sec base
-    const charDelay = (textLength || 0) * 0.05; // 50ms per character
+function calculateHumanDelay(textLength, minSec = 3.5, maxSec = 22) {
+    const base = Math.random() * (5 - minSec) + minSec; // 3.5 to 5 sec base
+    const charDelay = (textLength || 0) * 0.095; // 95ms per character
     const totalSec = Math.min(maxSec, base + charDelay);
     return Math.floor(totalSec * 1000);
 }
 
-// Helper: Send message simulating human typing/recording, rate limiter, and presence states
-async function sendHumanMessage(sock, remoteJid, content, options = {}) {
+// Helper: Send message through centralized FIFO Queue simulating human typing/recording, rate limiter, and presence states
+export async function sendHumanMessage(sock, remoteJid, content, options = {}) {
     const userId = options.userId;
     const io = options.io;
     const { userId: optUserId, io: optIo, ...msgOptions } = options;
@@ -93,32 +94,8 @@ async function sendHumanMessage(sock, remoteJid, content, options = {}) {
     }
 
     try {
-        // Send presence: available
-        await sock.sendPresenceUpdate('available', remoteJid);
-
-        // Determine if composing or recording
-        const isAudio = content.audio || (content.mimetype && content.mimetype.startsWith('audio/')) || !!(content.audioMessage);
-        const presenceState = isAudio ? 'recording' : 'composing';
-        
-        // Send presence state (typing/recording)
-        await sock.sendPresenceUpdate(presenceState, remoteJid);
-
-        // Calculate and execute delay
-        let textLength = 0;
-        if (content.text) {
-            textLength = content.text.length;
-        } else if (content.caption) {
-            textLength = content.caption.length;
-        }
-        const delay = calculateHumanDelay(textLength);
-        await new Promise(r => setTimeout(r, delay));
-
-        // Send actual message
-        const sentMsg = await sock.sendMessage(remoteJid, content, msgOptions);
-
-        // Send presence: paused, then unavailable
-        await sock.sendPresenceUpdate('paused', remoteJid);
-        await sock.sendPresenceUpdate('unavailable', remoteJid);
+        // إرسال الرسالة عبر طابور الواتساب الموحد (مع محاكاة القراءة و "يكتب الآن..." وفاصل الأمان)
+        const sentMsg = await whatsappQueue.enqueue(sock, remoteJid, content, msgOptions);
 
         if (options.saveToDb && userId) {
             let logText = "";
@@ -633,8 +610,8 @@ async function handleOrderCompletion(sock, customerJid, lastMessage, aiResponse,
             return;
         }
 
-        // 8. Send message to group
-        await sock.sendMessage(targetGroupJid, { text: groupMsg });
+        // 8. Send message to group through Queue
+        await sendHumanMessage(sock, targetGroupJid, { text: groupMsg }, { userId });
         console.log(`✅ Order forwarded to group "${targetGroup}"!`);
 
     } catch (error) {
@@ -1341,7 +1318,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             const sock = sessions.get(userId);
             if (sock.user) {
                 try {
-                    await sock.sendMessage(user.control_group_jid, { text: '✅ تم تشغيل البوت من لوحة التحكم.' });
+                    await sendHumanMessage(sock, user.control_group_jid, { text: '✅ تم تشغيل البوت من لوحة التحكم.' }, { userId });
                 } catch (e) {
                     console.error("Error notifying control group:", e);
                 }
@@ -1784,7 +1761,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         user.pause_until = null;
                         user.control_group_jid = remoteJid;
                         await user.save();
-                        await sock.sendMessage(remoteJid, { text: '✅ تم إيقاف البوت عن الرد تلقائياً على جميع المحادثات.' });
+                        await sendHumanMessage(sock, remoteJid, { text: '✅ تم إيقاف البوت عن الرد تلقائياً على جميع المحادثات.' }, { userId });
                         return;
                     }
 
@@ -1794,7 +1771,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         user.pause_until = null;
                         user.control_group_jid = remoteJid;
                         await user.save();
-                        await sock.sendMessage(remoteJid, { text: '✅ تم إعادة تشغيل البوت للرد على الجميع.' });
+                        await sendHumanMessage(sock, remoteJid, { text: '✅ تم إعادة تشغيل البوت للرد على الجميع.' }, { userId });
                         return;
                     }
 
@@ -1824,12 +1801,12 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                             const dateStr = unlockTime.toLocaleDateString('en-GB'); // DD/MM/YYYY
                             const timeStr = unlockTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: 'numeric', hour12: true });
 
-                            await sock.sendMessage(remoteJid, { text: `✅ تم إيقاف الرد مؤقتاً لمدة ${num} ${unit}.\n\nسيتم الاستئناف تلقائياً في:\n${dateStr}\nالساعة\n${timeStr}` });
+                            await sendHumanMessage(sock, remoteJid, { text: `✅ تم إيقاف الرد مؤقتاً لمدة ${num} ${unit}.\n\nسيتم الاستئناف تلقائياً في:\n${dateStr}\nالساعة\n${timeStr}` }, { userId });
 
                         } else {
                             // If just "انتظر", ask for duration? 
                             // For simplicity in V1, let's just ask to specify.
-                            await sock.sendMessage(remoteJid, { text: '⚠️ يرجى تحديد المدة. مثال: "انتظر 15 دقيقة" أو "انتظر 2 ساعة".' });
+                            await sendHumanMessage(sock, remoteJid, { text: '⚠️ يرجى تحديد المدة. مثال: "انتظر 15 دقيقة" أو "انتظر 2 ساعة".' }, { userId });
                         }
                         return;
                     }
@@ -1842,17 +1819,11 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 if (groupMetadata.subject && groupMetadata.subject.includes("عبقرينو")) {
                     console.log(`🤖 Abkarino Group Message: ${text}`);
 
-                    // Simulate Typing
-                    await sock.sendPresenceUpdate('composing', remoteJid);
-
                     // Call Abkarino API
                     const replyText = await callAbkarinoAPI(text, userId);
 
-                    // Stop Typing
-                    await sock.sendPresenceUpdate('paused', remoteJid);
-
-                    // Send Reply
-                    await sock.sendMessage(remoteJid, { text: replyText });
+                    // Send Reply through Queue
+                    await sendHumanMessage(sock, remoteJid, { text: replyText }, { userId });
 
                     // Save Bot Reply
                     const savedResponse = await Message.create({
@@ -2129,7 +2100,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         }
                     }
                     if (targetJid) {
-                        await sock.sendMessage(targetJid, { text: notifyMsg });
+                        await sendHumanMessage(sock, targetJid, { text: notifyMsg }, { userId });
                         console.log(`[Menu-Only] ✅ Handoff notification sent to group ${targetJid}`);
                     }
                 } catch (e) {
@@ -2302,7 +2273,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     }
 
                     if (targetJid) {
-                        await sock.sendMessage(targetJid, { text: notifyMsg });
+                        await sendHumanMessage(sock, targetJid, { text: notifyMsg }, { userId });
                         console.log(`[AI Handoff] ✅ Notification sent to group ${targetJid}`);
                     } else {
                         console.log('[AI Handoff] ❌ No group named GAC CRM found! Check group name.');
@@ -2686,7 +2657,7 @@ export const checkPauseTimer = async (io) => {
                     try {
                         const sock = sessions.get(user.id);
                         if (sock) {
-                            await sock.sendMessage(user.control_group_jid, { text: '✅ انتهت مدة الانتظار. تم استئناف الرد التلقائي.' });
+                            await sendHumanMessage(sock, user.control_group_jid, { text: '✅ انتهت مدة الانتظار. تم استئناف الرد التلقائي.' }, { userId: user.id });
                         }
                     } catch (err) {
                         console.error(`[Pause Timer] Error sending resume notification for user ${user.id}:`, err);
@@ -2753,7 +2724,7 @@ export const checkInactivitySummary = async () => {
                 const phoneDisplay = conv.phoneNumber || conv.remoteJid.split('@')[0];
                 const summaryMsg = `📋 *ملخص محادثة منتهية (لا رد منذ 15 دقيقة)*\n\n👤 العميل: ${customerDisplay}\n📱 الرقم: ${phoneDisplay}\n📱 المنصة: واتساب\n🕐 آخر رسالة: ${conv.lastMessageAt?.toLocaleTimeString('ar-EG') || '-'}\n\n─────────────────\n${chatLog}\n─────────────────\n\nيرجى المتابعة مع العميل إذا لزم الأمر.`;
 
-                await sock.sendMessage(user.control_group_jid, { text: summaryMsg });
+                await sendHumanMessage(sock, user.control_group_jid, { text: summaryMsg }, { userId: user.id });
                 
                 console.log(`[InactivitySummary] Sent summary for ${conv.remoteJid} (User: ${user.id})`);
                 
@@ -3448,8 +3419,8 @@ export async function sendManualMessage(userId, remoteJid, text) {
     const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
     if (!sock) throw new Error("البوت غير متصل حالياً.");
     
-    // إرسال الرسالة
-    await sock.sendMessage(remoteJid, { text });
+    // إرسال الرسالة عبر الطابور
+    await sendHumanMessage(sock, remoteJid, { text }, { userId });
     
     // حفظ الرسالة
     const savedMsg = await Message.create({
@@ -3492,7 +3463,7 @@ export async function notifyControlGroup(userId, message) {
         }
 
         if (targetJid) {
-            await sock.sendMessage(targetJid, { text: message });
+            await sendHumanMessage(sock, targetJid, { text: message }, { userId });
             return true;
         }
 
@@ -3656,7 +3627,7 @@ export const checkNoActionCustomers = async (io) => {
                     await customer.save();
 
                     const handoffMsg = `جاري تحويلك إلى ${assignedSalesName}. يرجى الانتظار 🙏`;
-                    await sock.sendMessage(conversation.remoteJid, { text: handoffMsg });
+                    await sendHumanMessage(sock, conversation.remoteJid, { text: handoffMsg }, { userId });
 
                     const transferTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo', hour12: true, dateStyle: 'short', timeStyle: 'short' });
                     const notifyMsg = `🚨 *طلب تدخل فريق المبيعات (Auto-Handoff)*\n\n🔖 كود العميل: ${customer.customerNumber || customer.id}\n👤 العميل: ${customer.customerName || 'عميل واتساب'}\n📞 الرقم: ${customer.phoneNumber}\n👨‍💼 الموظف المسئول: ${assignedSalesName}\n🕒 وقت التحويل: ${transferTime}`;
@@ -3721,7 +3692,7 @@ export const generateDailyKPI = async () => {
 
             if (kpis.length === 0) {
                 const emptyMsg = `📊 *تقرير الأداء اليومي (${yesterdayStr})* 📊\n\nلم يتم تسجيل أي نشاط للموظفين بالأمس.`;
-                await sock.sendMessage(userObj.control_group_jid, { text: emptyMsg });
+                await sendHumanMessage(sock, userObj.control_group_jid, { text: emptyMsg }, { userId: ownerId });
                 continue;
             }
 
@@ -3754,7 +3725,7 @@ export const generateDailyKPI = async () => {
                 `📥 *إجمالي العملاء المستلمين:* ${totalCustomers}\n\n` +
                 `تمنياتنا لكم بيوم عمل موفق ومثمر! 🚀✨`;
 
-            await sock.sendMessage(userObj.control_group_jid, { text: summaryMsg });
+            await sendHumanMessage(sock, userObj.control_group_jid, { text: summaryMsg }, { userId: ownerId });
             console.log(`[DailyKPIJob] Sent daily KPI report for user ${ownerId} to control group.`);
         }
     } catch (error) {

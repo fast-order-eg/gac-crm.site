@@ -6,7 +6,7 @@ import ChangeLog from '../models/ChangeLog.js';
 import FollowUp from '../models/FollowUp.js';
 import { getSetting as getSystemSetting } from './settingsService.js';
 import * as notificationService from './notificationService.js';
-import { sessions, generateDynamicFollowUpMessage } from '../controllers/botController.js';
+import { sessions, generateDynamicFollowUpMessage, sendHumanMessage } from '../controllers/botController.js';
 
 export const checkPendingFollowUps = async (io) => {
     try {
@@ -107,7 +107,7 @@ export const checkPendingFollowUps = async (io) => {
                             customerFirstMsg = await generateDynamicFollowUpMessage(customer.id, userId, firstFollowupMessage);
                         }
 
-                        await sock.sendMessage(customer.remoteJid, { text: customerFirstMsg });
+                        await sendHumanMessage(sock, customer.remoteJid, { text: customerFirstMsg }, { userId });
 
                         await Message.create({
                             UserId: userId,
@@ -168,7 +168,7 @@ export const checkPendingFollowUps = async (io) => {
                             customerFinalMsg = await generateDynamicFollowUpMessage(customer.id, userId, finalFollowupMessage);
                         }
 
-                        await sock.sendMessage(customer.remoteJid, { text: customerFinalMsg });
+                        await sendHumanMessage(sock, customer.remoteJid, { text: customerFinalMsg }, { userId });
 
                         await Message.create({
                             UserId: userId,
@@ -310,7 +310,7 @@ export const checkScheduledFollowUps = async (io) => {
             try {
                 // إرسال رسالة المتابعة المجدولة
                 if (followup.message) {
-                    await sock.sendMessage(followup.customer.remoteJid, { text: followup.message });
+                    await sendHumanMessage(sock, followup.customer.remoteJid, { text: followup.message }, { userId });
                     
                     await Message.create({
                         UserId: userId,

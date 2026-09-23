@@ -4,14 +4,11 @@ import Message from '../models/Message.js';
 import Conversation from '../models/Conversation.js';
 import MessengerConversation from '../models/MessengerConversation.js';
 import Customer from '../models/Customer.js';
-import { sendManualMessage } from './botController.js';
+import { sendManualMessage, sendHumanMessage, sessions } from './botController.js';
 import { sendMessengerReply, sendMessengerMedia } from './messengerController.js';
 import { Op } from 'sequelize';
 import path from 'path';
 import fs from 'fs';
-
-// Helper for sessions Map
-import { sessions } from './botController.js';
 
 // Wait utility
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -129,8 +126,8 @@ export async function runBroadcastCampaign(campaignId, targets, messageText, use
                         messageContent.text = `${messageText}\n\n${mediaUrl}`;
                     }
 
-                    // إرسال عبر واتساب
-                    messageResponse = await sock.sendMessage(target.remoteJid, messageContent);
+                    // إرسال عبر واتساب من خلال طابور الأمان
+                    messageResponse = await sendHumanMessage(sock, target.remoteJid, messageContent, { userId });
                     sent++;
 
                     // حفظ الرسالة في قاعدة البيانات مع الـ CampaignId
