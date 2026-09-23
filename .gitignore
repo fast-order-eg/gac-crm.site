@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Environment Variables (حساسة - لا ترفعها أبداً!)
+.env
+.env.*
+
+# WhatsApp Sessions (حساسة جداً)
+sessions/
+auth_info_baileys/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Build outputs
+dist/
+build/
+
+# Google Service Account Keys & Secrets
+*.json
+*.json*
+*.old
+!package.json
+!package-lock.json
+
+# Local Databases
+*.sql
+*.sqlite
+*.sqlite*
+*.db
+
+# Archives & Backups
+*.zip
+*.rar
+*.tar.gz
+*.patch
+index_old.txt
+
+# Temp & Scratch
+scratch/
+qr.png
