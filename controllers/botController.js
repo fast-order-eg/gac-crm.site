@@ -42,9 +42,45 @@ export const sessions = new Map();
 // In-memory LID → phone number cache (populated from senderPn and phoneNumberShare events)
 const lidPhoneMap = new Map();
 
-// Rate limiting and debounce maps
+// Rate limiting, debounce, and anti-ban caches
 const userHourlyMessageCount = new Map();
 const contactDebounceMap = new Map();
+const contactTextBufferMap = new Map();
+const groupMetadataCache = new Map(); // groupId -> { data, expiresAt }
+const participatingGroupsCache = new Map(); // userId -> { data, expiresAt }
+
+// Helper: Get Group Metadata with 30-min Memory Cache (Anti-Ban: prevents spamming groupMetadata API)
+async function getCachedGroupMetadata(sock, groupJid) {
+    const cached = groupMetadataCache.get(groupJid);
+    if (cached && cached.expiresAt > Date.now()) {
+        return cached.data;
+    }
+    const metadata = await sock.groupMetadata(groupJid);
+    if (metadata) {
+        groupMetadataCache.set(groupJid, {
+            data: metadata,
+            expiresAt: Date.now() + 30 * 60 * 1000 // 30 minutes
+        });
+    }
+    return metadata;
+}
+
+// Helper: Get Participating Groups with 15-min Memory Cache
+async function getCachedParticipatingGroups(sock, userId = 'default', forceRefresh = false) {
+    const cacheKey = String(userId);
+    const cached = participatingGroupsCache.get(cacheKey);
+    if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+        return cached.data;
+    }
+    const groups = await sock.groupFetchAllParticipating();
+    if (groups) {
+        participatingGroupsCache.set(cacheKey, {
+            data: groups,
+            expiresAt: Date.now() + 15 * 60 * 1000 // 15 minutes
+        });
+    }
+    return groups;
+}
 
 // Helper: Calculate random delay based on text length to simulate human behavior
 function calculateHumanDelay(textLength, minSec = 3.5, maxSec = 22) {
@@ -68,10 +104,10 @@ export async function sendHumanMessage(sock, remoteJid, content, options = {}) {
         times = times.filter(t => t > oneHourAgo);
         
         const count = times.length;
-        console.log(`📊 [Anti-Ban Rate Limiter] User ${userId} hourly message count: ${count}`);
+        console.log(`📊 [Anti-Ban Warm-up Limiter] User ${userId} hourly message count: ${count}/45`);
 
-        if (count >= 70) {
-            console.warn(`🛑 [Anti-Ban Rate Limiter] Blocked message: User ${userId} sent ${count} messages in the last hour (Limit: 70). Pausing bot.`);
+        if (count >= 45) {
+            console.warn(`🛑 [Anti-Ban Warm-up Limiter] Blocked message: User ${userId} sent ${count} messages in the last hour (Safe Warm-up Limit: 45). Pausing bot.`);
             try {
                 await User.update({ auto_reply: false, connection_status: 'paused' }, { where: { id: userId } });
                 if (io) {
@@ -86,9 +122,9 @@ export async function sendHumanMessage(sock, remoteJid, content, options = {}) {
         times.push(now);
         userHourlyMessageCount.set(userId, times);
 
-        if (count >= 40) {
-            const extraDelay = 5000 + Math.random() * 5000; // 5 to 10 seconds extra delay
-            console.log(`⏳ [Anti-Ban Rate Limiter] User ${userId} has sent ${count} messages. Adding extra delay: ${extraDelay}ms`);
+        if (count >= 25) {
+            const extraDelay = 6000 + Math.random() * 6000; // 6 to 12 seconds extra slowdown
+            console.log(`⏳ [Anti-Ban Warm-up Limiter] User ${userId} has sent ${count} messages this hour. Adding warm-up slowdown: ${Math.round(extraDelay)}ms`);
             await new Promise(r => setTimeout(r, extraDelay));
         }
     }
@@ -1538,21 +1574,15 @@ export const startSession = async (userId, io, phoneNumber = null) => {
 
         if (!msg.message) return;
 
-        // محاكاة قراءة الرسائل: تأخير زمني من 1.5 إلى 3 ثوانٍ قبل استدعاء sock.readMessages
-        const readDelay = Math.random() * (3000 - 1500) + 1500;
-        await new Promise(r => setTimeout(r, readDelay));
-        try {
-            await sock.readMessages([msg.key]);
-        } catch (readErr) {
-            console.error("Error marking message as read:", readErr);
-        }
-
         const user = await User.findByPk(userId);
         if (!user) return;
 
         // Resolve the best remoteJid (prefer phone-based @s.whatsapp.net over @lid)
         const remoteJid = resolveRemoteJid(msg.key);
         const phoneNumber = extractPhoneNumber(msg.key, msg);
+
+        // تسجيل مفتاح الرسالة في طابور الواتساب ليتم وضع "الصحين الزرق" (readMessages) فقط عندما يحين دور العميل في الطابور
+        whatsappQueue.queueReadKey(remoteJid, msg.key);
         
         // Debug: Log LID-related fields to understand what Baileys v6 sends
         if (msg.key.remoteJid && msg.key.remoteJid.endsWith('@lid')) {
@@ -1696,7 +1726,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         }
         // === End Text Menu Parser ===
 
-        // 1. Save User Message to DB (ALWAYS)
+        // 1. Save User Message to DB (ALWAYS immediately so dashboard sees it live)
         if (text) {
             const savedMsg = await Message.create({
                 UserId: userId,
@@ -1707,6 +1737,32 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             });
             io.to(`user_${userId}`).emit('new_message', savedMsg);
         }
+
+        // === Early Debounce & Multi-Message Aggregation (لمنع الرد المتكرر إذا أرسل العميل عدة جمل متتالية) ===
+        if (!remoteJid.endsWith('@g.us') && text && messageType !== 'imageMessage' && messageType !== 'audioMessage' && messageType !== 'videoMessage') {
+            const debounceKey = `${userId}_${remoteJid}`;
+            const currentToken = `${Date.now()}_${Math.random()}`;
+            const prevTexts = contactTextBufferMap.get(debounceKey) || [];
+            prevTexts.push(text.trim());
+            contactTextBufferMap.set(debounceKey, prevTexts);
+            contactDebounceMap.set(debounceKey, currentToken);
+
+            // انتظر 3.5 ثانية ليرى البوت هل العميل لا يزال يكتب جملة ثانية أم انتهى
+            await new Promise(resolve => setTimeout(resolve, 3500));
+
+            if (contactDebounceMap.get(debounceKey) !== currentToken) {
+                console.log(`⏳ [Anti-Ban Debounce] دمج الرسائل السريعة المتتالية من العميل ${remoteJid} للرد مرة واحدة...`);
+                return;
+            }
+
+            const aggregatedLines = contactTextBufferMap.get(debounceKey) || [text];
+            contactTextBufferMap.delete(debounceKey);
+            if (aggregatedLines.length > 1) {
+                text = aggregatedLines.join('\n');
+                console.log(`🔗 [Anti-Ban Debounce] تم دمج ${aggregatedLines.length} رسائل متتالية من ${remoteJid}: "${text.replace(/\n/g, ' | ')}"`);
+            }
+        }
+        // === End Early Debounce ===
 
         // === Interactive Buttons: Check for trigger words ===
         if (text && !remoteJid.endsWith('@g.us') && user.bot_mode !== 'ai_only' && !user.buttons_disabled) {
@@ -1735,8 +1791,8 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         // 2. Check for "GAC CRM" or "Abkarino" Group Message (High Priority)
         if (remoteJid.endsWith('@g.us')) {
             try {
-                // Fetch group metadata to check name
-                const groupMetadata = await sock.groupMetadata(remoteJid);
+                // Fetch group metadata with 30-min Memory Cache to avoid spamming WhatsApp servers
+                const groupMetadata = await getCachedGroupMetadata(sock, remoteJid);
 
                 // Check for "GAC CRM" Group (Control Center)
                 const subjectLower = groupMetadata.subject ? groupMetadata.subject.toLowerCase() : '';
@@ -2014,7 +2070,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         if (remoteJid.endsWith('@g.us')) {
             // Double check if it's the control group, just in case
             try {
-                const groupMetadata = await sock.groupMetadata(remoteJid);
+                const groupMetadata = await getCachedGroupMetadata(sock, remoteJid);
                 const subjectLower = groupMetadata.subject ? groupMetadata.subject.toLowerCase() : '';
                 if (subjectLower === "gac crm") {
                     console.log(`[Safety Check] Allowed GAC CRM group message to pass through ignore block: ${remoteJid}`);
@@ -2028,19 +2084,6 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 return;
             }
         }
-
-        // === Debounce System ===
-        const debounceKey = userId + '_' + remoteJid;
-        const currentToken = Date.now() + '_' + Math.random();
-        contactDebounceMap.set(debounceKey, currentToken);
-
-        await new Promise(resolve => setTimeout(resolve, 3000));
-
-        if (contactDebounceMap.get(debounceKey) !== currentToken) {
-            console.log(`⏳ [Debounce] Ignoring duplicate fast message for contact ${remoteJid}`);
-            return;
-        }
-        // === End Debounce System ===
 
         // ======================================================
         // 🔒 Menu-Only Mode — وضع القوائم فقط
@@ -2089,7 +2132,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     
                     let targetJid = user.control_group_jid || null;
                     if (!targetJid) {
-                        const groups = await sock.groupFetchAllParticipating();
+                        const groups = await getCachedParticipatingGroups(sock, userId);
                         for (const groupId in groups) {
                             const group = groups[groupId];
                             const subjectLower = group.subject ? group.subject.toLowerCase() : '';
@@ -3444,19 +3487,22 @@ export async function notifyControlGroup(userId, message) {
         const userObj = await User.findByPk(userId);
         if (!userObj) return false;
         
-        // Import sessions if not available, wait, sessions is already in botController.js
         const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
         if (!sock) return false;
 
         let targetJid = userObj.control_group_jid;
 
         if (!targetJid) {
-            const groups = await sock.groupFetchAllParticipating();
+            const groups = await getCachedParticipatingGroups(sock, userId);
             for (const groupId in groups) {
                 const group = groups[groupId];
-                const subjectLower = group.subject ? group.subject.toLowerCase() : '';
+                const subjectLower = group.subject ? group.subject.toLowerCase().trim() : '';
                 if (subjectLower === 'gac crm') {
                     targetJid = groupId;
+                    try {
+                        userObj.control_group_jid = targetJid;
+                        await userObj.save();
+                    } catch (saveErr) {}
                     break;
                 }
             }
@@ -3924,11 +3970,21 @@ export const checkGacCrmGroup = async (userId) => {
     }
     
     try {
-        const groups = await sock.groupFetchAllParticipating();
+        const userObj = await User.findByPk(userId);
+        if (userObj && userObj.control_group_jid) {
+            return 'found';
+        }
+        const groups = await getCachedParticipatingGroups(sock, userId);
         for (const groupId in groups) {
             const group = groups[groupId];
             const subjectLower = group.subject ? group.subject.toLowerCase().trim() : '';
             if (subjectLower === 'gac crm') {
+                if (userObj) {
+                    try {
+                        userObj.control_group_jid = groupId;
+                        await userObj.save();
+                    } catch (e) {}
+                }
                 return 'found';
             }
         }

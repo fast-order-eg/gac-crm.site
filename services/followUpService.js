@@ -68,8 +68,21 @@ export const checkPendingFollowUps = async (io) => {
                 }
             }
 
-            // 2. معالجة المتابعات المجدولة للعملاء في حالة "first_follow_up"
-            const scheduledCustomers = await Customer.findAll({
+            // 🛡️ حماية ضد الحظر: منع إرسال رسائل المتابعة التلقائية في ساعات النوم (من 11 مساءً حتى 9 صباحاً بتوقيت القاهرة)
+            const cairoHourStr = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'Africa/Cairo',
+                hour: 'numeric',
+                hour12: false
+            }).format(now);
+            const cairoHour = parseInt(cairoHourStr, 10);
+            const isQuietHours = (cairoHour >= 23 || cairoHour < 9);
+
+            if (isQuietHours) {
+                console.log(`🌙 [FollowUp Anti-Ban] وقت الهدوء الليلي (${cairoHour}:00 بتوقيت القاهرة). تأجيل إرسال رسائل المتابعة للصباح لمنع الإزعاج والحظر.`);
+            }
+
+            // 2. معالجة المتابعات المجدولة للعملاء في حالة "first_follow_up" (فقط خارج ساعات النوم وبحد أقصى 3 عملاء في الدورة الواحدة)
+            const scheduledCustomers = isQuietHours ? [] : await Customer.findAll({
                 where: {
                     UserId: userId,
                     status: {
@@ -83,10 +96,18 @@ export const checkPendingFollowUps = async (io) => {
                         { lastReplyAt: null },
                         { lastReplyAt: { [Op.lt]: Sequelize.col('lastBotMessageAt') } }
                     ]
-                }
+                },
+                limit: 3
             });
 
-            for (const customer of scheduledCustomers) {
+            for (let idx = 0; idx < scheduledCustomers.length; idx++) {
+                const customer = scheduledCustomers[idx];
+                // فاصل أمان إضافي بين كل رسالة متابعة والأخرى (20 إلى 35 ثانية) لأنها رسائل إعادة تواصل
+                if (idx > 0) {
+                    const followUpWait = Math.floor(Math.random() * (35000 - 20000) + 20000);
+                    console.log(`⏳ [FollowUp Anti-Ban] انتظار ${(followUpWait / 1000).toFixed(0)} ثانية قبل إرسال رسالة المتابعة التالية...`);
+                    await new Promise(r => setTimeout(r, followUpWait));
+                }
                 try {
                     // التحقق هل تم إرسال المتابعة الأولى للعميل من قبل
                     const firstFollowupSent = await FollowUp.findOne({
