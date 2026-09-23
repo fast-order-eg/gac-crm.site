@@ -129,6 +129,7 @@ const User = sequelize.define('User', {
         comment: 'تعطيل ردود البوت بالأزرار بالكامل'
     }
 }, {
+    tableName: 'users',
     hooks: {
         beforeCreate: async (user) => {
             if (user.password) {

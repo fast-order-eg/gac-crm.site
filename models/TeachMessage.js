@@ -16,6 +16,8 @@ const TeachMessage = sequelize.define('TeachMessage', {
         type: DataTypes.TEXT,
         allowNull: false
     }
+}, {
+    tableName: 'teachmessages'
 });
 
 User.hasMany(TeachMessage);

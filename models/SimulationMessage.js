@@ -16,6 +16,8 @@ const SimulationMessage = sequelize.define('SimulationMessage', {
         type: DataTypes.TEXT,
         allowNull: false
     }
+}, {
+    tableName: 'simulationmessages'
 });
 
 // Relationships

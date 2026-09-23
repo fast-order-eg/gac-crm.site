@@ -69,6 +69,8 @@ const Campaign = sequelize.define('Campaign', {
         type: DataTypes.DATE,
         allowNull: true
     }
+}, {
+    tableName: 'campaigns'
 });
 
 import User from './User.js';
