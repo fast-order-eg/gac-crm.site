@@ -83,7 +83,7 @@
     <%- include('partials/navbar') %>
     <%- include('partials/sidebar') %>
 
-    <div class="container-fluid main-content px-3 px-lg-5 py-3">
+    <div class="container-fluid main-content px-3 px-lg-5" style="padding-top: 115px !important; padding-bottom: 50px !important;">
         
         <!-- Alerts -->
         <% if (typeof success_msg !== 'undefined' && success_msg && success_msg.length > 0) { %>
@@ -207,13 +207,13 @@
                                         <div class="card-body p-2.5">
                                             <div class="row g-2">
                                                 <!-- Times -->
-                                                <div class="col-6">
-                                                    <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">من الساعة</label>
-                                                    <input type="time" class="form-control form-control-sm shift-start-time" value="<%= s.startTime %>" required style="font-size: 11.5px; height: 32px;">
+                                                <div class="col-12 col-sm-6">
+                                                    <label class="form-label text-muted mb-0.5 d-block" style="font-size: 11px;">من الساعة</label>
+                                                    <input type="time" class="form-control form-control-sm shift-start-time" value="<%= s.startTime %>" required style="font-size: 12px; height: 36px;">
                                                 </div>
-                                                <div class="col-6">
-                                                    <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">إلى الساعة</label>
-                                                    <input type="time" class="form-control form-control-sm shift-end-time" value="<%= s.endTime %>" required style="font-size: 11.5px; height: 32px;">
+                                                <div class="col-12 col-sm-6">
+                                                    <label class="form-label text-muted mb-0.5 d-block" style="font-size: 11px;">إلى الساعة</label>
+                                                    <input type="time" class="form-control form-control-sm shift-end-time" value="<%= s.endTime %>" required style="font-size: 12px; height: 36px;">
                                                 </div>
 
                                                 <!-- Days -->
@@ -298,13 +298,13 @@
                     </div>
                     <div class="card-body p-2.5">
                         <div class="row g-2">
-                            <div class="col-6">
-                                <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">من الساعة</label>
-                                <input type="time" class="form-control form-control-sm shift-start-time" value="09:00" required style="font-size: 11.5px; height: 32px;">
+                            <div class="col-12 col-sm-6">
+                                <label class="form-label text-muted mb-0.5 d-block" style="font-size: 11px;">من الساعة</label>
+                                <input type="time" class="form-control form-control-sm shift-start-time" value="09:00" required style="font-size: 12px; height: 36px;">
                             </div>
-                            <div class="col-6">
-                                <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">إلى الساعة</label>
-                                <input type="time" class="form-control form-control-sm shift-end-time" value="17:00" required style="font-size: 11.5px; height: 32px;">
+                            <div class="col-12 col-sm-6">
+                                <label class="form-label text-muted mb-0.5 d-block" style="font-size: 11px;">إلى الساعة</label>
+                                <input type="time" class="form-control form-control-sm shift-end-time" value="17:00" required style="font-size: 12px; height: 36px;">
                             </div>
                             <div class="col-12">
                                 <label class="form-label text-muted mb-1 d-block" style="font-size: 10.5px;">أيام العمل</label>
