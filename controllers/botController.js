@@ -23,7 +23,7 @@ import * as notificationService from '../services/notificationService.js';
 import { Op, Sequelize } from 'sequelize';
 import { GoogleAuth } from 'google-auth-library';
 import { vertexQueue } from '../services/queueService.js';
-import { whatsappQueue } from '../services/whatsappQueueService.js';
+import { whatsappQueue, recentSystemMsgIds } from '../services/whatsappQueueService.js';
 import { funnelDefaults } from '../config/funnelDefaults.js';
 import { getSetting as getSystemSetting } from '../services/settingsService.js';
 import { getEgyptTimeInfo, isTimeInShift } from '../services/assignmentService.js';
@@ -292,6 +292,135 @@ function resolveRemoteJid(msgKey) {
     }
     // Fallback to whatever we have (Baileys can route @lid too)
     return jid;
+}
+
+// دالة مساعدة موحدة لاستخراج نصوص ومرفقات وسائط الرسائل (صوت، صور، فيديو، مستندات) وتنزيلها
+async function extractMessageDetails(msg, userId, sock) {
+    if (!msg || !msg.message) return { text: '', mediaUrl: null, messageType: null };
+
+    let messageObj = { ...msg.message };
+    let messageType = Object.keys(messageObj)[0];
+
+    // فك التغليف للرسائل المؤقتة أو ذات المشاهدة الواحدة أو المستندات المرفقة
+    while (['ephemeralMessage', 'viewOnceMessage', 'viewOnceMessageV2', 'documentWithCaptionMessage'].includes(messageType)) {
+        if (messageObj[messageType]?.message) {
+            messageObj = messageObj[messageType].message;
+            messageType = Object.keys(messageObj)[0];
+        } else {
+            break;
+        }
+    }
+
+    let text = "";
+    let mediaUrl = null;
+
+    if (messageType === 'conversation') {
+        text = messageObj.conversation || "";
+    } else if (messageType === 'extendedTextMessage') {
+        text = messageObj.extendedTextMessage?.text || "";
+    } else if (messageType === 'audioMessage') {
+        text = "رسالة صوتية 🎙️";
+        try {
+            const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
+            if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+            const audioBuffer = await downloadMediaMessage(
+                { ...msg, message: messageObj },
+                'buffer',
+                {},
+                { logger: sock.logger, reuploadRequest: sock.updateMediaMessage }
+            );
+            const isMp4 = messageObj.audioMessage?.mimetype?.includes('mp4');
+            const ext = isMp4 ? 'm4a' : 'ogg';
+            const audioFileName = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+            const audioPath = path.join(mediaDir, audioFileName);
+            fs.writeFileSync(audioPath, audioBuffer);
+            mediaUrl = `/uploads/media/${userId}/${audioFileName}`;
+        } catch (mediaSaveErr) {
+            console.error("Error saving audio message:", mediaSaveErr);
+        }
+    } else if (messageType === 'imageMessage') {
+        const caption = messageObj.imageMessage?.caption || "";
+        text = caption ? `📷 صورة: ${caption}` : "📷 صورة";
+        try {
+            const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
+            if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+            const imageBuffer = await downloadMediaMessage(
+                { ...msg, message: messageObj },
+                'buffer',
+                {},
+                { logger: sock.logger, reuploadRequest: sock.updateMediaMessage }
+            );
+            const isPng = messageObj.imageMessage?.mimetype?.includes('png');
+            const ext = isPng ? 'png' : 'jpg';
+            const imageFileName = `img_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+            const imagePath = path.join(mediaDir, imageFileName);
+            fs.writeFileSync(imagePath, imageBuffer);
+            mediaUrl = `/uploads/media/${userId}/${imageFileName}`;
+        } catch (mediaSaveErr) {
+            console.error("Error saving image message:", mediaSaveErr);
+        }
+    } else if (messageType === 'videoMessage') {
+        const caption = messageObj.videoMessage?.caption || "";
+        text = caption ? `🎥 فيديو: ${caption}` : "🎥 فيديو";
+        try {
+            const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
+            if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+            const videoBuffer = await downloadMediaMessage(
+                { ...msg, message: messageObj },
+                'buffer',
+                {},
+                { logger: sock.logger, reuploadRequest: sock.updateMediaMessage }
+            );
+            const videoFileName = `vid_${Date.now()}_${Math.floor(Math.random() * 1000)}.mp4`;
+            const videoPath = path.join(mediaDir, videoFileName);
+            fs.writeFileSync(videoPath, videoBuffer);
+            mediaUrl = `/uploads/media/${userId}/${videoFileName}`;
+        } catch (mediaSaveErr) {
+            console.error("Error saving video message:", mediaSaveErr);
+        }
+    } else if (messageType === 'documentMessage') {
+        const doc = messageObj.documentMessage;
+        const origFileName = doc?.fileName || `doc_${Date.now()}`;
+        const caption = doc?.caption || "";
+        text = caption ? `📄 مستند: ${caption} (${origFileName})` : `📄 مستند: ${origFileName}`;
+        try {
+            const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
+            if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+            const docBuffer = await downloadMediaMessage(
+                { ...msg, message: messageObj },
+                'buffer',
+                {},
+                { logger: sock.logger, reuploadRequest: sock.updateMediaMessage }
+            );
+            const cleanName = origFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const docFileName = `doc_${Date.now()}_${cleanName}`;
+            const docPath = path.join(mediaDir, docFileName);
+            fs.writeFileSync(docPath, docBuffer);
+            mediaUrl = `/uploads/media/${userId}/${docFileName}`;
+        } catch (mediaSaveErr) {
+            console.error("Error saving document message:", mediaSaveErr);
+        }
+    } else if (messageType === 'stickerMessage') {
+        text = "ملصق 🎭";
+        try {
+            const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
+            if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+            const stickerBuffer = await downloadMediaMessage(
+                { ...msg, message: messageObj },
+                'buffer',
+                {},
+                { logger: sock.logger, reuploadRequest: sock.updateMediaMessage }
+            );
+            const stickerFileName = `sticker_${Date.now()}_${Math.floor(Math.random() * 1000)}.webp`;
+            const stickerPath = path.join(mediaDir, stickerFileName);
+            fs.writeFileSync(stickerPath, stickerBuffer);
+            mediaUrl = `/uploads/media/${userId}/${stickerFileName}`;
+        } catch (mediaSaveErr) {
+            console.error("Error saving sticker message:", mediaSaveErr);
+        }
+    }
+
+    return { text, mediaUrl, messageType };
 }
 
 async function callVertexAI(remoteJid, userText, mediaBuffer = null, mediaMime = null, userId) {
@@ -1543,35 +1672,143 @@ export const startSession = async (userId, io, phoneNumber = null) => {
     // ... (Existing functions)
 
     sock.ev.on('messages.upsert', async (m) => {
-        if (m.type !== 'notify') return;
-        const msg = m.messages[0];
+        if (m.type !== 'notify' && m.type !== 'append') return;
+        if (!m.messages || m.messages.length === 0) return;
+
+        // في حالة نوع append (مزامنة التاريخ)، نتجاهل الرسائل القديمة لأكثر من دقيقتين
+        if (m.type === 'append') {
+            const nowSec = Math.floor(Date.now() / 1000);
+            m.messages = m.messages.filter(msg => msg.messageTimestamp && (nowSec - Number(msg.messageTimestamp)) < 120);
+            if (m.messages.length === 0) return;
+        }
+
+        // ============================================================
+        // 🔄 مزامنة الرسائل الصادرة من تطبيق واتساب (الهاتف) مع اللايف شات
+        // ============================================================
+        for (const msg of m.messages) {
+            if (!msg.key.fromMe) continue;
+
+            const rawJid = msg.key.remoteJid;
+            if (!rawJid || rawJid.includes('@newsletter') || rawJid === 'status@broadcast' || rawJid.endsWith('@g.us')) {
+                continue;
+            }
+
+            // فحص هل الرسالة مرسلة من نظامنا الداخلي (البوت أو لوحة التحكم) لتجنب التكرار
+            if (msg.key.id && recentSystemMsgIds.has(msg.key.id)) {
+                continue;
+            }
+
+            const existingMsg = msg.key.id ? await Message.findOne({ where: { UserId: userId, messageId: msg.key.id } }) : null;
+            if (existingMsg) {
+                continue;
+            }
+
+            // إذا وصلنا هنا: فهذه الرسالة مرسلة يدوياً من تطبيق واتساب عبر الهاتف أو واتساب ويب خارجي
+            try {
+                const remoteJid = resolveRemoteJid(msg.key);
+                const phoneNumber = extractPhoneNumber(msg.key, msg);
+                const jidAlt = msg.key.remoteJidAlt;
+
+                // 1. تفعيل وضع التحويل للبشر (Auto-Handoff) للمحادثة فور رد الموظف من الهاتف
+                const whereConditions = [{ UserId: userId, remoteJid }];
+                if (jidAlt && jidAlt !== remoteJid) {
+                    whereConditions.push({ UserId: userId, remoteJid: jidAlt });
+                }
+                await Conversation.update(
+                    { is_handoff: true },
+                    { where: { [Op.or]: whereConditions } }
+                );
+
+                // 2. استخراج النص والوسائط (فويس، صورة، فيديو، مستند، ملصق) وتنزيلها
+                const { text: fromMeText, mediaUrl: fromMeMediaUrl } = await extractMessageDetails(msg, userId, sock);
+                if (!fromMeText && !fromMeMediaUrl) continue;
+
+                // 3. جلب أو ربط المحادثة وسجل العميل
+                let conv = await Conversation.findOne({
+                    where: { [Op.or]: whereConditions }
+                });
+
+                let customer = null;
+                if (conv && conv.CustomerId) {
+                    customer = await Customer.findByPk(conv.CustomerId);
+                }
+                if (!customer) {
+                    const custWhere = [{ UserId: userId, remoteJid }];
+                    if (jidAlt && jidAlt !== remoteJid) custWhere.push({ UserId: userId, remoteJid: jidAlt });
+                    if (phoneNumber) custWhere.push({ UserId: userId, phoneNumber });
+                    customer = await Customer.findOne({ where: { [Op.or]: custWhere } });
+                }
+
+                const targetJid = conv ? conv.remoteJid : remoteJid;
+
+                // 4. حفظ الرسالة في قاعدة البيانات كـ model (صادرة من الفريق)
+                const savedMsg = await Message.create({
+                    UserId: userId,
+                    remoteJid: targetJid,
+                    role: 'model',
+                    content: fromMeText || 'رسالة',
+                    media_url: fromMeMediaUrl || null,
+                    messageId: msg.key.id || null,
+                    status: 'sent',
+                    createdAt: msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date()
+                });
+
+                // 5. تحديث المحادثة في جدول Conversations
+                if (!conv) {
+                    conv = await Conversation.create({
+                        UserId: userId,
+                        remoteJid: targetJid,
+                        platform: 'whatsapp',
+                        customerName: customer?.customerName || phoneNumber || targetJid.split('@')[0],
+                        phoneNumber: phoneNumber || null,
+                        lastMessageText: fromMeText || 'رسالة',
+                        unreadCount: 0,
+                        is_handoff: true,
+                        CustomerId: customer?.id || null
+                    });
+                } else {
+                    conv.lastMessageText = fromMeText || 'رسالة';
+                    conv.lastMessageAt = new Date();
+                    conv.unreadCount = 0; // تصفير العداد لأن الموظف رد بالفعل من الهاتف
+                    conv.is_handoff = true;
+                    if (customer && !conv.CustomerId) {
+                        conv.CustomerId = customer.id;
+                    }
+                    await conv.save();
+                }
+
+                // 6. بث فوري لصفحة اللايف شات عبر Socket.IO
+                if (io) {
+                    io.to(`user_${userId}`).emit('new_message', savedMsg);
+                    io.to(`user_${userId}`).emit('conversation_updated', conv);
+                }
+
+                // 7. احتساب سرعة الاستجابة في نظام الـ KPI للموظف المسئول
+                if (customer) {
+                    try {
+                        const { recordResponse } = await import('../services/kpiService.js');
+                        const responderId = customer.assignedToUserId || userId;
+                        await recordResponse(responderId, customer.id);
+                    } catch (kpiErr) {
+                        console.error("Error recording KPI on WhatsApp phone reply:", kpiErr?.message || kpiErr);
+                    }
+                }
+
+                console.log(`📱 [WhatsApp Outgoing Sync] تم مزامنة رسالة أرسلها الفريق من الواتساب للعميل ${targetJid}: "${fromMeText}"`);
+            } catch (syncErr) {
+                console.error("❌ Error syncing WhatsApp outgoing fromMe message:", syncErr);
+            }
+        }
+
+        // ============================================================
+        // 📥 معالجة الرسائل الواردة من العملاء (!fromMe)
+        // ============================================================
+        const msg = m.messages.find(m_ => !m_.key.fromMe);
+        if (!msg) return; // جميع الرسائل في الدفعة كانت صادرة وتمت مزامنتها أعلاه
 
         // تجاهل رسائل قنوات الواتساب وحالات البث فوراً عن طريق التحقق من الـ remoteJid
         const rawJid = msg.key.remoteJid;
         if (rawJid && (rawJid.includes('@newsletter') || rawJid === 'status@broadcast')) return;
-
-        // 0. Auto-Handoff on Manual Reply
-        if (msg.key.fromMe) {
-            const remoteJid = msg.key.remoteJid;
-            if (remoteJid && !remoteJid.endsWith('@g.us') && remoteJid !== 'status@broadcast') {
-                try {
-                    // Try both the original JID and the alt JID (for @lid cases)
-                    const jidAlt = msg.key.remoteJidAlt;
-                    const whereConditions = [{ UserId: userId, remoteJid }];
-                    if (jidAlt && jidAlt !== remoteJid) {
-                        whereConditions.push({ UserId: userId, remoteJid: jidAlt });
-                    }
-                    await Conversation.update(
-                        { is_handoff: true },
-                        { where: { [Op.or]: whereConditions } }
-                    );
-                    console.log(`[Auto-Handoff] Owner replied manually to ${remoteJid}. Bot paused for this chat.`);
-                } catch (e) {
-                    console.error("Auto-Handoff Error:", e);
-                }
-            }
-            return; // Ignore fromMe messages so bot doesn't process them
-        }
 
         if (!msg.message) return;
 
@@ -1598,55 +1835,10 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         
         if (remoteJid === 'status@broadcast') return;
         if (msg.key.remoteJid === 'status@broadcast') return;
-        
-        let messageType = Object.keys(msg.message)[0];
-        if (messageType === 'ephemeralMessage' || messageType === 'viewOnceMessage' || messageType === 'documentWithCaptionMessage') {
-            const actualMessage = msg.message[messageType]?.message;
-            if (actualMessage) {
-                messageType = Object.keys(actualMessage)[0];
-                msg.message = actualMessage; // unwrap
-            }
-        }
 
-        let text = "";
-        let incomingMediaUrl = null;
-
-        if (messageType === 'conversation') text = msg.message.conversation;
-        else if (messageType === 'extendedTextMessage') text = msg.message.extendedTextMessage.text;
-        else if (messageType === 'audioMessage') {
-            text = "رسالة صوتية 🎙️";
-            try {
-                const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
-                if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
-                const audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: sock.logger, reuploadRequest: sock.updateMediaMessage });
-                const audioFileName = `audio_${Date.now()}.ogg`;
-                const audioPath = path.join(mediaDir, audioFileName);
-                fs.writeFileSync(audioPath, audioBuffer);
-                incomingMediaUrl = `/uploads/media/${userId}/${audioFileName}`;
-            } catch (mediaSaveErr) { console.error("Error saving incoming audio:", mediaSaveErr); }
-        } else if (messageType === 'imageMessage') {
-            text = msg.message.imageMessage.caption ? "📷 صورة: " + msg.message.imageMessage.caption : "📷 صورة";
-            try {
-                const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
-                if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
-                const imageBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: sock.logger, reuploadRequest: sock.updateMediaMessage });
-                const imageFileName = `img_${Date.now()}.jpg`;
-                const imagePath = path.join(mediaDir, imageFileName);
-                fs.writeFileSync(imagePath, imageBuffer);
-                incomingMediaUrl = `/uploads/media/${userId}/${imageFileName}`;
-            } catch (mediaSaveErr) { console.error("Error saving incoming image:", mediaSaveErr); }
-        } else if (messageType === 'videoMessage') {
-            text = msg.message.videoMessage.caption ? "🎥 فيديو: " + msg.message.videoMessage.caption : "🎥 فيديو";
-            try {
-                const mediaDir = path.join(process.cwd(), 'public', 'uploads', 'media', String(userId));
-                if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
-                const videoBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: sock.logger, reuploadRequest: sock.updateMediaMessage });
-                const videoFileName = `vid_${Date.now()}.mp4`;
-                const videoPath = path.join(mediaDir, videoFileName);
-                fs.writeFileSync(videoPath, videoBuffer);
-                incomingMediaUrl = `/uploads/media/${userId}/${videoFileName}`;
-            } catch (mediaSaveErr) { console.error("Error saving incoming video:", mediaSaveErr); }
-        }
+        // استخراج النص ومرفقات الوسائط للرسالة الواردة باستخدام الدالة الموحدة
+        const { text: incomingText, mediaUrl: incomingMediaUrl, messageType } = await extractMessageDetails(msg, userId, sock);
+        let text = incomingText;
 
         // === Interactive Buttons Logic (Check button responses + triggers) ===
         // Handle button/list responses from customer
@@ -3500,14 +3692,16 @@ export async function sendManualMessage(userId, remoteJid, text) {
     if (!sock) throw new Error("البوت غير متصل حالياً.");
     
     // إرسال الرسالة عبر الطابور
-    await sendHumanMessage(sock, remoteJid, { text }, { userId });
+    const sentMsg = await sendHumanMessage(sock, remoteJid, { text }, { userId });
     
-    // حفظ الرسالة
+    // حفظ الرسالة مع معرّفها لمنع التكرار
     const savedMsg = await Message.create({
         UserId: userId,
         remoteJid,
         role: 'model',
-        content: text
+        content: text,
+        messageId: sentMsg?.key?.id || null,
+        status: 'sent'
     });
     
     // تحديث المحادثة
@@ -3516,6 +3710,60 @@ export async function sendManualMessage(userId, remoteJid, text) {
         { where: { UserId: userId, remoteJid } }
     );
     
+    return savedMsg;
+}
+
+export async function sendManualMediaMessage(userId, remoteJid, filePath, mimetype, caption = '') {
+    const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
+    if (!sock) throw new Error("البوت غير متصل حالياً.");
+
+    const ext = path.extname(filePath).toLowerCase();
+    const isAudio = (mimetype && mimetype.startsWith('audio/')) || ['.ogg', '.mp3', '.wav', '.m4a', '.opus'].includes(ext);
+    const isImage = (mimetype && mimetype.startsWith('image/')) || ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext);
+    const isVideo = (mimetype && mimetype.startsWith('video/')) || ['.mp4', '.mov', '.webm'].includes(ext);
+
+    let messageContent = {};
+    let logText = caption || '';
+    const fileBuffer = fs.readFileSync(filePath);
+
+    if (isAudio) {
+        messageContent = { audio: fileBuffer, mimetype: mimetype || 'audio/ogg; codecs=opus', ptt: true };
+        logText = logText || 'رسالة صوتية 🎙️';
+    } else if (isImage) {
+        messageContent = { image: fileBuffer, caption: caption || undefined };
+        logText = caption ? `📷 صورة: ${caption}` : '📷 صورة';
+    } else if (isVideo) {
+        messageContent = { video: fileBuffer, caption: caption || undefined };
+        logText = caption ? `🎥 فيديو: ${caption}` : '🎥 فيديو';
+    } else {
+        const fileName = path.basename(filePath);
+        messageContent = { document: fileBuffer, mimetype: mimetype || 'application/octet-stream', fileName: fileName, caption: caption || undefined };
+        logText = caption ? `📄 مستند: ${caption} (${fileName})` : `📄 مستند: ${fileName}`;
+    }
+
+    const sentMsg = await sendHumanMessage(sock, remoteJid, messageContent, { userId });
+
+    let relativeUrl = filePath;
+    if (filePath.includes('public')) {
+        relativeUrl = filePath.substring(filePath.indexOf('public') + 6).replace(/\\/g, '/');
+    }
+    if (!relativeUrl.startsWith('/')) relativeUrl = '/' + relativeUrl;
+
+    const savedMsg = await Message.create({
+        UserId: userId,
+        remoteJid,
+        role: 'model',
+        content: logText,
+        media_url: relativeUrl,
+        messageId: sentMsg?.key?.id || null,
+        status: 'sent'
+    });
+
+    await Conversation.update(
+        { lastMessageText: logText, lastMessageAt: new Date() },
+        { where: { UserId: userId, remoteJid } }
+    );
+
     return savedMsg;
 }
 

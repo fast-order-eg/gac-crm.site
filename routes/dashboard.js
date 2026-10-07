@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
-import { startSession, stopSession, logoutSession, getStatus, getGroups, sendManualMessage, generateCustomerSummary, checkGacCrmGroup } from '../controllers/botController.js';
+import { startSession, stopSession, logoutSession, getStatus, getGroups, sendManualMessage, sendManualMediaMessage, generateCustomerSummary, checkGacCrmGroup } from '../controllers/botController.js';
 import User from '../models/User.js';
 import Message from '../models/Message.js';
 import Customer from '../models/Customer.js';
@@ -975,6 +975,11 @@ router.post('/livechat/send', async (req, res) => {
         // إرسال الرسالة باستخدام معرف مالك الجلسة
         const savedMsg = await sendManualMessage(customer.UserId, remoteJid, text);
         
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${customer.UserId}`).emit('new_message', savedMsg);
+        }
+
         // تسجيل رد الموظف وسرعة الاستجابة في نظام الـ KPI تلقائياً
         try {
             const { recordResponse } = await import('../services/kpiService.js');
@@ -987,6 +992,63 @@ router.post('/livechat/send', async (req, res) => {
     } catch (err) {
         console.error('SendManual error:', err);
         res.status(500).json({ error: err.message || 'Failed to send message' });
+    }
+});
+
+// إعداد مولتر لرفع وسائط اللايف شات
+const livechatMediaStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const dir = path.join(process.cwd(), 'public', 'uploads', 'media');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname);
+        const uniqueName = `livechat_${Date.now()}_${Math.round(Math.random() * 1E9)}${ext}`;
+        cb(null, uniqueName);
+    }
+});
+
+const uploadLivechatMedia = multer({
+    storage: livechatMediaStorage,
+    limits: { fileSize: 25 * 1024 * 1024 } // 25 MB max limit
+});
+
+router.post('/livechat/send-media', uploadLivechatMedia.single('mediaFile'), async (req, res) => {
+    try {
+        const { remoteJid, caption } = req.body;
+        if (!remoteJid) return res.status(400).json({ error: 'remoteJid required' });
+        if (!req.file) return res.status(400).json({ error: 'لم يتم إرفاق أي ملف' });
+
+        const customer = await Customer.findOne({ where: { remoteJid } });
+        if (!customer) {
+            return res.status(404).json({ error: 'العميل غير موجود' });
+        }
+
+        const savedMsg = await sendManualMediaMessage(
+            customer.UserId,
+            remoteJid,
+            req.file.path,
+            req.file.mimetype,
+            caption || ''
+        );
+
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${customer.UserId}`).emit('new_message', savedMsg);
+        }
+
+        try {
+            const { recordResponse } = await import('../services/kpiService.js');
+            await recordResponse(req.user.id, customer.id);
+        } catch (kpiErr) {
+            console.error('Error recording KPI response in /livechat/send-media:', kpiErr);
+        }
+
+        res.json({ success: true, message: savedMsg });
+    } catch (err) {
+        console.error('SendMedia error:', err);
+        res.status(500).json({ error: err.message || 'فشل إرسال الوسائط' });
     }
 });
 

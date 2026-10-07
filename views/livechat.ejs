@@ -67,6 +67,13 @@
         .bbl-in  { background:#1e293b; color:#cbd5e1; align-self:flex-end; border-bottom-right-radius:3px; }
         .bbl-out { background:linear-gradient(135deg,#4f46e5,#6366f1); color:white; align-self:flex-start; border-bottom-left-radius:3px; }
         .bbl-t { font-size:10px; opacity:.55; margin-top:3px; }
+        .media-bubble { max-width: 250px; border-radius: 8px; overflow: hidden; margin-bottom: 5px; }
+        .media-bubble img { max-width: 240px; max-height: 240px; object-fit: cover; border-radius: 8px; cursor: pointer; display: block; transition: transform 0.2s ease; }
+        .media-bubble img:hover { transform: scale(1.02); }
+        .media-bubble video { max-width: 250px; max-height: 250px; border-radius: 8px; display: block; }
+        .media-bubble audio { max-width: 250px; min-width: 200px; height: 38px; border-radius: 20px; display: block; }
+        .media-doc-card { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(255,255,255,0.08); border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); max-width: 240px; text-decoration: none !important; color: inherit !important; }
+        .media-doc-card:hover { background: rgba(255,255,255,0.15); }
         .lc-send-bar { padding:10px 14px; background:rgba(15,23,42,.9); border-top:1px solid rgba(255,255,255,.07); display:flex; gap:8px; align-items:flex-end; flex-shrink:0; }
         .lc-send-bar textarea { flex:1; background:#1e293b; border:1px solid rgba(255,255,255,.1); color:#fff; border-radius:10px; padding:9px 13px; resize:none; font-size:13px; min-height:40px; max-height:110px; }
         .lc-send-bar textarea:focus { outline:none; border-color:#6366f1; }
@@ -223,7 +230,30 @@
                          </div>
                     </div>
                     <div class="lc-msgs" id="lcMsgs"></div>
+
+                    <!-- Outgoing Media Preview Overlay -->
+                    <div id="mediaPreviewOverlay" style="display:none; padding:8px 14px; background:rgba(15,23,42,0.95); border-top:1px solid rgba(255,255,255,0.07); align-items:center; gap:10px;">
+                        <div id="mediaPreviewThumb" style="width:42px; height:42px; border-radius:6px; background:#1e293b; display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid rgba(255,255,255,0.1); flex-shrink:0;">
+                            <i class="bi bi-file-earmark fs-4 text-white-50" id="mediaPreviewIcon"></i>
+                            <img id="mediaPreviewImg" src="" style="width:100%; height:100%; object-fit:cover; display:none;">
+                        </div>
+                        <div class="flex-grow-1 min-w-0">
+                            <div class="fw-bold small text-white text-truncate" id="mediaPreviewName">ملف محدد</div>
+                            <input type="text" id="mediaCaptionIn" class="form-control form-control-sm mt-1" placeholder="أضف تعليقاً على المرفق (اختياري)..." style="font-size:12px; background:#1e293b; color:#fff; border-color:rgba(255,255,255,0.1); border-radius:6px;">
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="cancelMediaPreview()" title="إلغاء">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-primary px-3 fw-bold" id="btnSendMedia" onclick="submitMediaUpload()" title="إرسال الميديا">
+                            <i class="bi bi-send-fill me-1"></i> إرسال
+                        </button>
+                    </div>
+
                     <div class="lc-send-bar">
+                        <input type="file" id="mediaFileInput" style="display:none;" onchange="onFileSelected(this)" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xlsx,.zip">
+                        <button type="button" class="btn btn-link text-white-50 p-1 me-1" onclick="document.getElementById('mediaFileInput').click()" title="إرفاق صورة أو فيديو أو فويس أو مستند" style="font-size:19px; line-height:1; text-decoration:none;">
+                            <i class="bi bi-paperclip"></i>
+                        </button>
                         <textarea id="lcIn" placeholder="اكتب ردك... (Enter=إرسال، Shift+Enter=سطر جديد)" rows="1"></textarea>
                         <button class="btn-ls" onclick="sendMsg()"><i class="bi bi-send-fill"></i></button>
                     </div>
@@ -235,15 +265,48 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script>
-    let curJid=null, curHO=false;
-    const io_=io();
-    io_.on('connect',()=>io_.emit('join_room','user_<%= targetUserId %>'));
-    io_.on('new_message',msg=>{
-        const el=document.querySelector(`.lc-item[data-jid="${msg.remoteJid}"]`);
+    let curJid = null, curHO = false;
+    const io_ = io();
+    io_.on('connect', () => io_.emit('join_room', 'user_<%= targetUserId %>'));
+
+    io_.on('new_message', msg => {
+        const el = document.querySelector(`.lc-item[data-jid="${msg.remoteJid}"]`);
         let content = msg.content ? msg.content.replace(/\[M:\d+\]/g, '').trim() : '';
-        if(el) el.querySelector('.lc-prev').textContent=content;
-        if(msg.remoteJid===curJid) addBbl(content, msg.role==='user', new Date(msg.createdAt));
+        if (el) {
+            el.querySelector('.lc-prev').textContent = content;
+            const tEl = el.querySelector('.lc-t');
+            if (tEl) tEl.textContent = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true});
+            if (el.parentElement) el.parentElement.prepend(el);
+        }
+        if (msg.remoteJid === curJid) {
+            addBbl(content, msg.role === 'user', new Date(msg.createdAt), msg.media_url);
+        }
     });
+
+    io_.on('conversation_updated', conv => {
+        const el = document.querySelector(`.lc-item[data-jid="${conv.remoteJid}"]`);
+        if (el) {
+            el.dataset.handoff = conv.is_handoff ? 'true' : 'false';
+            const av = el.querySelector('.lc-av');
+            if (conv.is_handoff) {
+                av.classList.add('handoff-av');
+                if (!av.querySelector('.h-dot')) {
+                    const dot = document.createElement('div');
+                    dot.className = 'h-dot';
+                    av.appendChild(dot);
+                }
+            } else {
+                av.classList.remove('handoff-av');
+                const dot = av.querySelector('.h-dot');
+                if (dot) dot.remove();
+            }
+            if (conv.remoteJid === curJid) {
+                curHO = conv.is_handoff;
+                updHO(curHO);
+            }
+        }
+    });
+
     let showOnlyHandoff = false;
 
     function applyFilters() {
@@ -265,10 +328,12 @@
         this.classList.toggle('btn-outline-warning');
         applyFilters();
     });
+
     function goBackToList() {
         const outer = document.querySelector('.lc-outer');
         if (outer) outer.classList.remove('lc-show-chat');
     }
+
     function copyPhone() {
         const phoneSpan = document.getElementById('lcPhone');
         if (phoneSpan && phoneSpan.textContent) {
@@ -289,15 +354,16 @@
             }
         }
     }
-    async function loadChat(jid,nm,ho,phone){
-        curJid=jid;curHO=ho;
+
+    async function loadChat(jid, nm, ho, phone) {
+        curJid = jid; curHO = ho;
         const outer = document.querySelector('.lc-outer');
         if (outer) outer.classList.add('lc-show-chat');
-        document.querySelectorAll('.lc-item').forEach(el=>el.classList.toggle('active',el.dataset.jid===jid));
-        document.getElementById('lcEmpty').style.display='none';
-        const v=document.getElementById('lcActive');v.style.display='flex';
-        document.getElementById('lcAv').textContent=nm[0]?.toUpperCase()||'?';
-        document.getElementById('lcNm').textContent=nm;
+        document.querySelectorAll('.lc-item').forEach(el => el.classList.toggle('active', el.dataset.jid === jid));
+        document.getElementById('lcEmpty').style.display = 'none';
+        const v = document.getElementById('lcActive'); v.style.display = 'flex';
+        document.getElementById('lcAv').textContent = nm[0]?.toUpperCase() || '?';
+        document.getElementById('lcNm').textContent = nm;
         
         const isLid = jid.endsWith('@lid');
         const phoneDisplay = phone || (!isLid && jid.includes('@s.whatsapp.net') ? jid.split('@')[0] : '');
@@ -315,83 +381,198 @@
             if (phoneActions) phoneActions.style.display = 'none';
         }
         
-        document.getElementById('lcJd').textContent=isLid ? '' : jid.split('@')[0];
+        document.getElementById('lcJd').textContent = isLid ? '' : jid.split('@')[0];
         updHO(ho);
-        const r=await fetch(`/dashboard/livechat/${encodeURIComponent(jid)}/messages`);
-        const d=await r.json();
-        const box=document.getElementById('lcMsgs');box.innerHTML='';
-        if(d.messages) d.messages.forEach(m=>{
+        const r = await fetch(`/dashboard/livechat/${encodeURIComponent(jid)}/messages`);
+        const d = await r.json();
+        const box = document.getElementById('lcMsgs'); box.innerHTML = '';
+        if (d.messages) d.messages.forEach(m => {
             let content = m.content ? m.content.replace(/\[M:\d+\]/g, '').trim() : '';
-            addBbl(content, m.role==='user', new Date(m.createdAt));
+            addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url);
         });
-        box.scrollTop=box.scrollHeight;
-        const it=document.querySelector(`.lc-item[data-jid="${jid}"]`);
-        if(it){const u=it.querySelector('.unread-pill');if(u)u.remove();}
+        box.scrollTop = box.scrollHeight;
+        const it = document.querySelector(`.lc-item[data-jid="${jid}"]`);
+        if (it) { const u = it.querySelector('.unread-pill'); if (u) u.remove(); }
     }
-    function addBbl(txt,isIn,date){
-        const box=document.getElementById('lcMsgs');
-        const d=document.createElement('div');
-        d.className=`lc-bbl ${isIn?'bbl-in':'bbl-out'}`;
-        const t=date?date.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true}):'';
-        d.innerHTML=`${txt.replace(/\n/g,'<br>')}<div class="bbl-t">${t}</div>`;
-        box.appendChild(d);box.scrollTop=box.scrollHeight;
+
+    function addBbl(txt, isIn, date, mediaUrl) {
+        if (!txt && !mediaUrl) return;
+        const box = document.getElementById('lcMsgs');
+        const d = document.createElement('div');
+        d.className = `lc-bbl ${isIn ? 'bbl-in' : 'bbl-out'}`;
+        const t = date ? date.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '';
+
+        let contentHtml = '';
+        if (mediaUrl) {
+            const cleanUrl = mediaUrl.trim();
+            const ext = cleanUrl.split('?')[0].split('.').pop().toLowerCase();
+            const isAudio = ['ogg', 'mp3', 'wav', 'm4a', 'opus', 'webm'].includes(ext) || (txt && (txt.includes('صوتية') || txt.includes('audio')));
+            const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) || (txt && (txt.includes('صورة') || txt.includes('img')));
+            const isVideo = ['mp4', 'webm', 'mov'].includes(ext) || (txt && (txt.includes('فيديو') || txt.includes('vid')));
+
+            if (isAudio) {
+                contentHtml += `<div class="media-bubble"><audio src="${cleanUrl}" controls preload="metadata"></audio></div>`;
+            } else if (isImage) {
+                contentHtml += `<div class="media-bubble"><a href="${cleanUrl}" target="_blank" download title="انقر للفتح بالكامل أو التحميل"><img src="${cleanUrl}" alt="صورة" loading="lazy"></a></div>`;
+            } else if (isVideo) {
+                contentHtml += `<div class="media-bubble"><video src="${cleanUrl}" controls></video></div>`;
+            } else {
+                const fileName = cleanUrl.split('/').pop() || 'مستند';
+                contentHtml += `<div class="media-bubble"><a href="${cleanUrl}" target="_blank" download class="media-doc-card"><i class="bi bi-file-earmark-arrow-down-fill fs-4 text-primary"></i><div><div class="fw-bold small text-truncate" style="max-width:160px;">${fileName}</div><div class="text-white-50" style="font-size:10px;">انقر للتحميل 📥</div></div></a></div>`;
+            }
+        }
+
+        const isGenericPlaceholder = txt && ['رسالة صوتية 🎙️', '📷 صورة', 'صورة 📷', '🎥 فيديو', 'فيديو 🎥', '📄 مستند', 'ملصق 🎭'].some(p => txt.trim() === p);
+        if (txt && (!mediaUrl || !isGenericPlaceholder)) {
+            contentHtml += `<div class="msg-text">${txt.replace(/\n/g, '<br>')}</div>`;
+        }
+
+        d.innerHTML = `${contentHtml}<div class="bbl-t">${t}</div>`;
+        box.appendChild(d);
+        box.scrollTop = box.scrollHeight;
     }
-    async function sendMsg(){
-        const inp=document.getElementById('lcIn');
-        const txt=inp.value.trim();
-        if(!txt||!curJid) return;
-        inp.value='';inp.style.height='auto';
-        addBbl(txt,false,new Date());
-        const r=await fetch('/dashboard/livechat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({remoteJid:curJid,text:txt})});
-        const d=await r.json();
-        if(!d.success) alert('فشل إرسال الرسالة: '+(d.error||'خطأ'));
+
+    async function sendMsg() {
+        const inp = document.getElementById('lcIn');
+        const txt = inp.value.trim();
+        if (!txt || !curJid) return;
+        inp.value = ''; inp.style.height = 'auto';
+        addBbl(txt, false, new Date());
+        const r = await fetch('/dashboard/livechat/send', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({remoteJid: curJid, text: txt})
+        });
+        const d = await r.json();
+        if (!d.success) alert('فشل إرسال الرسالة: ' + (d.error || 'خطأ'));
     }
-    async function doHandoff(){
-        if(!curJid) return;
-        const nv=!curHO;
-        const r=await fetch('/dashboard/livechat/handoff',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({remoteJid:curJid,enable:nv})});
-        const d=await r.json();
-        if(d.success){
-            curHO=nv;updHO(nv);
-            const it=document.querySelector(`.lc-item[data-jid="${curJid}"]`);
-            if(it){
-                it.dataset.handoff=nv;
+
+    // --- Outgoing Media Upload Logic ---
+    let selectedMediaFile = null;
+
+    function onFileSelected(input) {
+        if (!input.files || !input.files[0]) return;
+        selectedMediaFile = input.files[0];
+        const overlay = document.getElementById('mediaPreviewOverlay');
+        const nameEl = document.getElementById('mediaPreviewName');
+        const imgEl = document.getElementById('mediaPreviewImg');
+        const iconEl = document.getElementById('mediaPreviewIcon');
+        const captionIn = document.getElementById('mediaCaptionIn');
+
+        nameEl.textContent = selectedMediaFile.name;
+        captionIn.value = '';
+
+        if (selectedMediaFile.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                imgEl.src = e.target.result;
+                imgEl.style.display = 'block';
+                iconEl.style.display = 'none';
+            };
+            reader.readAsDataURL(selectedMediaFile);
+        } else {
+            imgEl.style.display = 'none';
+            iconEl.style.display = 'block';
+            if (selectedMediaFile.type.startsWith('video/')) iconEl.className = 'bi bi-film fs-4 text-warning';
+            else if (selectedMediaFile.type.startsWith('audio/')) iconEl.className = 'bi bi-music-note-beamed fs-4 text-success';
+            else iconEl.className = 'bi bi-file-earmark-text fs-4 text-primary';
+        }
+
+        overlay.style.display = 'flex';
+    }
+
+    function cancelMediaPreview() {
+        selectedMediaFile = null;
+        document.getElementById('mediaFileInput').value = '';
+        document.getElementById('mediaPreviewOverlay').style.display = 'none';
+    }
+
+    async function submitMediaUpload() {
+        if (!selectedMediaFile || !curJid) return;
+        const btn = document.getElementById('btnSendMedia');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>إرسال...';
+
+        const caption = document.getElementById('mediaCaptionIn').value.trim();
+        const formData = new FormData();
+        formData.append('remoteJid', curJid);
+        formData.append('mediaFile', selectedMediaFile);
+        if (caption) formData.append('caption', caption);
+
+        try {
+            const res = await fetch('/dashboard/livechat/send-media', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (data.success) {
+                cancelMediaPreview();
+                if (data.message) {
+                    addBbl(data.message.content, false, new Date(data.message.createdAt), data.message.media_url);
+                }
+            } else {
+                alert('فشل إرسال المرفق: ' + (data.error || 'خطأ'));
+            }
+        } catch (err) {
+            console.error('Upload error:', err);
+            alert('حدث خطأ أثناء رفع الملف');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-send-fill me-1"></i> إرسال';
+        }
+    }
+
+    async function doHandoff() {
+        if (!curJid) return;
+        const nv = !curHO;
+        const r = await fetch('/dashboard/livechat/handoff', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({remoteJid: curJid, enable: nv})
+        });
+        const d = await r.json();
+        if (d.success) {
+            curHO = nv; updHO(nv);
+            const it = document.querySelector(`.lc-item[data-jid="${curJid}"]`);
+            if (it) {
+                it.dataset.handoff = nv;
                 const av = it.querySelector('.lc-av');
-                if(nv){
+                if (nv) {
                     av.classList.add('handoff-av');
-                    if(!av.querySelector('.h-dot')){
-                        const dot=document.createElement('div');
-                        dot.className='h-dot';
+                    if (!av.querySelector('.h-dot')) {
+                        const dot = document.createElement('div');
+                        dot.className = 'h-dot';
                         av.appendChild(dot);
                     }
                 } else {
                     av.classList.remove('handoff-av');
-                    const dot=av.querySelector('.h-dot');
-                    if(dot) dot.remove();
+                    const dot = av.querySelector('.h-dot');
+                    if (dot) dot.remove();
                 }
             }
         }
     }
-    function updHO(ho){
-        const btn=document.getElementById('lcBtn'),av=document.getElementById('lcAv');
-        if(ho){
+
+    function updHO(ho) {
+        const btn = document.getElementById('lcBtn'), av = document.getElementById('lcAv');
+        if (ho) {
             if (btn) {
-                btn.className='btn btn-sm btn-success fw-semibold';
-                btn.innerHTML='👤 السيلز';
+                btn.className = 'btn btn-sm btn-success fw-semibold';
+                btn.innerHTML = '👤 السيلز';
             }
             if (av) av.classList.add('handoff-av');
-        }
-        else  {
+        } else {
             if (btn) {
-                btn.className='btn btn-sm btn-primary fw-semibold';
-                btn.innerHTML='🤖 البوت';
+                btn.className = 'btn btn-sm btn-primary fw-semibold';
+                btn.innerHTML = '🤖 البوت';
             }
             if (av) av.classList.remove('handoff-av');
         }
     }
-    const lcIn=document.getElementById('lcIn');
-    lcIn.addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,110)+'px';});
-    lcIn.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
+
+    const lcIn = document.getElementById('lcIn');
+    lcIn.addEventListener('input', function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 110) + 'px'; });
+    lcIn.addEventListener('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
     </script>
 </body>
 </html>

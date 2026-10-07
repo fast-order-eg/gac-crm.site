@@ -15,6 +15,9 @@
 
 const INVISIBLE_CHARS = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
 
+// معرّفات الرسائل الصادرة من السيستم (البوت أو لوحة التحكم) لمنع تكرار معالجتها عند استقبال إشعار fromMe من واتساب
+export const recentSystemMsgIds = new Set();
+
 class WhatsAppQueue {
     constructor() {
         this.queue = [];
@@ -225,6 +228,12 @@ class WhatsAppQueue {
             // 7. إرسال الرسالة الفعلية
             const { userId, io, saveToDb, readKey, ...msgOptions } = options;
             const sentMsg = await sock.sendMessage(remoteJid, outboundContent, msgOptions);
+            if (sentMsg?.key?.id) {
+                recentSystemMsgIds.add(sentMsg.key.id);
+                setTimeout(() => {
+                    recentSystemMsgIds.delete(sentMsg.key.id);
+                }, 120000);
+            }
             console.log(`✅ [WhatsAppQueue] تم إرسال الرسالة بنجاح إلى ${remoteJid} (ببصمة نصية فريدة)`);
 
             // 8. إنهاء حالة الكتابة: paused ثم unavailable
