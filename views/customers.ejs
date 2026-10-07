@@ -501,13 +501,20 @@
                     </div>
                 </div>
                 <div class="modal-footer bg-light border-top-0 py-2">
-                    <div class="d-flex w-100 justify-content-between gap-2">
-                        <a href="#" id="detailsWhatsAppBtn" target="_blank" class="btn btn-sm btn-success px-3 rounded-pill fw-bold d-flex align-items-center gap-1">
-                            <i class="bi bi-whatsapp"></i> واتساب
-                        </a>
-                        <button class="btn btn-sm btn-primary px-3 rounded-pill fw-bold d-flex align-items-center gap-1" onclick="detailsOpenFollowUp()">
-                            <i class="bi bi-calendar-event"></i> جدولة متابعة
+                    <div class="d-flex w-100 justify-content-between align-items-center gap-2">
+                        <div class="d-flex gap-2">
+                            <a href="#" id="detailsWhatsAppBtn" target="_blank" class="btn btn-sm btn-success px-3 rounded-pill fw-bold d-flex align-items-center gap-1">
+                                <i class="bi bi-whatsapp"></i> واتساب
+                            </a>
+                            <button class="btn btn-sm btn-primary px-3 rounded-pill fw-bold d-flex align-items-center gap-1" onclick="detailsOpenFollowUp()">
+                                <i class="bi bi-calendar-event"></i> جدولة متابعة
+                            </button>
+                        </div>
+                        <% if (user.role === 'super_admin' || user.role === 'admin') { %>
+                        <button type="button" class="btn btn-sm btn-outline-danger px-3 rounded-pill fw-bold d-flex align-items-center gap-1" id="btnDeleteCustomer" onclick="detailsDeleteCustomer()" title="حذف العميل والمحادثات بالكامل">
+                            <i class="bi bi-trash3-fill"></i> حذف العميل
                         </button>
+                        <% } %>
                     </div>
                 </div>
             </div>
@@ -1414,6 +1421,52 @@
                 summaryContainer.textContent = "حدث خطأ أثناء الاتصال بالسيرفر لتوليد الملخص.";
                 showAlert('خطأ في الاتصال بالسيرفر.', 'danger');
             });
+        }
+
+        async function detailsDeleteCustomer() {
+            const customerId = document.getElementById('detailsCustomerId').value;
+            const customerName = document.getElementById('detailsCustName').textContent || 'هذا العميل';
+            if (!customerId) return;
+
+            if (!confirm(`⚠️ تحذير هـام:\nهل أنت متأكد من حذف العميل "${customerName}" نهائياً؟\n\nسيتم حذف بيانات العميل بالكامل، وجميع رسائل الشات، والمحادثات، والمتابعات، والإيصالات الخاصة به من قاعدة البيانات لكي يبدأ من الصفر تماماً إذا تواصل مجدداً.`)) {
+                return;
+            }
+
+            const deleteBtn = document.getElementById('btnDeleteCustomer');
+            const originalContent = deleteBtn ? deleteBtn.innerHTML : '';
+            if (deleteBtn) {
+                deleteBtn.disabled = true;
+                deleteBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> جاري الحذف...';
+            }
+
+            try {
+                const res = await fetch('/dashboard/customers/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: customerId })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    showAlert(data.message || 'تم حذف العميل وكافة بياناته بنجاح.', 'success');
+                    const detailsModalEl = document.getElementById('customerDetailsModal');
+                    if (detailsModalEl) {
+                        const detailsModal = bootstrap.Modal.getInstance(detailsModalEl);
+                        if (detailsModal) detailsModal.hide();
+                    }
+                    loadData(currentPage);
+                } else {
+                    showAlert(data.error || 'فشل حذف العميل.', 'danger');
+                }
+            } catch (err) {
+                console.error('Error deleting customer:', err);
+                showAlert('حدث خطأ في الاتصال أثناء حذف العميل.', 'danger');
+            } finally {
+                if (deleteBtn) {
+                    deleteBtn.disabled = false;
+                    deleteBtn.innerHTML = originalContent;
+                }
+            }
         }
 
         function submitAddCustomer(event) {

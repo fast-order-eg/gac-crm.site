@@ -7,6 +7,7 @@ import User from '../models/User.js';
 import Message from '../models/Message.js';
 import Customer from '../models/Customer.js';
 import Conversation from '../models/Conversation.js';
+import FollowUp from '../models/FollowUp.js';
 import ChangeLog from '../models/ChangeLog.js';
 import MessengerConversation from '../models/MessengerConversation.js';
 import MessengerPage from '../models/MessengerPage.js';
@@ -2872,6 +2873,116 @@ router.post('/customers/:id/summarize', async (req, res) => {
     } catch (err) {
         console.error('Error generating AI Summary:', err);
         res.status(500).json({ success: false, error: 'حدث خطأ أثناء تحليل المحادثة' });
+    }
+});
+
+router.post('/customers/delete', async (req, res) => {
+    try {
+        // التحقق من الصلاحيات: متاح للمدراء فقط (super_admin / admin) وليس السيلز
+        if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
+            return res.status(403).json({ success: false, error: 'غير مصرح لك بحذف العملاء. هذه الصلاحية للمدراء فقط.' });
+        }
+
+        const { id } = req.body;
+        if (!id) {
+            return res.status(400).json({ success: false, error: 'معرف العميل مطلوب.' });
+        }
+
+        const customer = await Customer.findByPk(id);
+        if (!customer) {
+            return res.status(404).json({ success: false, error: 'العميل غير موجود أو تم حذفه مسبقاً.' });
+        }
+
+        const ownerId = customer.UserId;
+        const remoteJid = customer.remoteJid;
+        const customerPhone = customer.phoneNumber;
+        const custName = customer.customerName || customer.phoneNumber || `عميل #${customer.id}`;
+
+        // 1. حذف جميع الرسائل الخاصة بهذا العميل في هذا الحساب
+        const jidConditions = [];
+        if (remoteJid) jidConditions.push(remoteJid);
+        if (customerPhone) {
+            jidConditions.push(`${customerPhone}@s.whatsapp.net`);
+            jidConditions.push(`${customerPhone}@lid`);
+        }
+        if (jidConditions.length > 0) {
+            await Message.destroy({
+                where: {
+                    UserId: ownerId,
+                    remoteJid: { [Op.in]: jidConditions }
+                }
+            });
+        }
+
+        // 2. حذف المحادثة (Conversation)
+        const convOr = [{ CustomerId: customer.id }];
+        if (jidConditions.length > 0) {
+            convOr.push({ remoteJid: { [Op.in]: jidConditions }, UserId: ownerId });
+        }
+        await Conversation.destroy({
+            where: {
+                [Op.or]: convOr
+            }
+        });
+
+        // 3. حذف المتابعات (FollowUps)
+        await FollowUp.destroy({
+            where: { CustomerId: customer.id }
+        });
+
+        // 4. حذف سجل التغييرات للعميل (ChangeLogs)
+        await ChangeLog.destroy({
+            where: {
+                [Op.or]: [
+                    { CustomerId: customer.id },
+                    { customerId: customer.id }
+                ]
+            }
+        });
+
+        // 5. حذف المعاملات المالية المرتبطة بالعميل
+        await FinancialTransaction.destroy({
+            where: { CustomerId: customer.id }
+        });
+
+        // 6. حذف الإشعارات المرتبطة بالعميل
+        await Notification.destroy({
+            where: { CustomerId: customer.id }
+        });
+
+        // 7. حذف ملف إيصال الدفع إن وجد
+        if (customer.paymentReceiptUrl) {
+            try {
+                const filePath = path.join(process.cwd(), 'public', customer.paymentReceiptUrl);
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            } catch (fileErr) {
+                console.error('Error deleting receipt file:', fileErr);
+            }
+        }
+
+        // 8. حذف سجل العميل نفسه
+        await customer.destroy();
+
+        // تسجيل عملية الحذف في سجل النظام العام
+        try {
+            await logChange({
+                UserId: req.user.id,
+                action: 'delete_customer',
+                details: `قام ${req.user.fullName || req.user.username} بحذف العميل "${custName}" وجميع رسائله ومحادثاته وسجلاته بالكامل.`
+            });
+        } catch (logErr) {
+            console.error('Error logging customer deletion:', logErr);
+        }
+
+        res.json({
+            success: true,
+            message: `تم حذف العميل "${custName}" وجميع المحادثات والرسائل الخاصة به بنجاح.`
+        });
+    } catch (err) {
+        console.error('Error in /customers/delete:', err);
+        res.status(500).json({ success: false, error: 'حدث خطأ أثناء حذف العميل. يرجى المحاولة مرة أخرى.' });
     }
 });
 
