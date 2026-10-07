@@ -153,6 +153,47 @@ export const defaultSettingsMeta = {
         category: 'general',
         label: 'اسم جروب المبيعات على واتساب',
         defaultValue: 'GAC Sales'
+    },
+    shift_split_rule: {
+        type: 'json',
+        category: 'general',
+        label: 'قواعد توزيع العملاء في الشيفتات (Multi-Shift Lead Routing)',
+        defaultValue: {
+            enabled: true,
+            shifts: [
+                {
+                    id: 'shift_1',
+                    name: 'الفترة الصباحية',
+                    startTime: '10:00',
+                    endTime: '18:00',
+                    days: ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+                    employees: []
+                },
+                {
+                    id: 'shift_2',
+                    name: 'الفترة المسائية',
+                    startTime: '18:00',
+                    endTime: '23:00',
+                    days: ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'],
+                    employees: []
+                },
+                {
+                    id: 'shift_3',
+                    name: 'الفترة الليلية حتى الصباح',
+                    startTime: '23:00',
+                    endTime: '10:00',
+                    days: ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'],
+                    employees: []
+                }
+            ],
+            defaultEmployeeId: null
+        }
+    },
+    last_assigned_shift_index: {
+        type: 'number',
+        category: 'general',
+        label: 'مؤشر التوزيع (Round Robin)',
+        defaultValue: 0
     }
 };
 

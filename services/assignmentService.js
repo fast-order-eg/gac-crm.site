@@ -2,6 +2,49 @@ import { Op } from 'sequelize';
 import User from '../models/User.js';
 import Customer from '../models/Customer.js';
 import ChangeLog from '../models/ChangeLog.js';
+import { getSetting, setSetting } from './settingsService.js';
+
+/**
+ * الحصول على الوقت واليوم المحلي بتوقيت مصر (Africa/Cairo) بصرامة 100% بغض النظر عن توقيت السيرفر UTC
+ */
+export function getEgyptTimeInfo() {
+    const options = { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+    const formatter = new Intl.DateTimeFormat('en-US', options);
+    const parts = formatter.formatToParts(new Date());
+    const dateObj = {};
+    parts.forEach(p => { dateObj[p.type] = p.value; });
+
+    const cairoDateStr = `${dateObj.year}-${dateObj.month}-${dateObj.day}T${dateObj.hour}:${dateObj.minute}:${dateObj.second}`;
+    const cairoDate = new Date(cairoDateStr);
+
+    const currentHour = parseInt(dateObj.hour, 10);
+    const currentMinute = parseInt(dateObj.minute, 10);
+    const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
+    
+    const daysOfWeek = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    const currentDayArabic = daysOfWeek[cairoDate.getDay()];
+
+    return {
+        currentHour,
+        currentMinute,
+        currentTimeStr,
+        currentDayArabic,
+        cairoDate
+    };
+}
+
+/**
+ * التحقق مما إذا كان الوقت الحالي يقع ضمن فترة الشيفت (مع دعم الفترات العابرة لمنتصف الليل Cross-Midnight).
+ */
+export function isTimeInShift(currentTime, startTime, endTime) {
+    if (!startTime || !endTime) return true;
+    if (startTime <= endTime) {
+        return currentTime >= startTime && currentTime <= endTime;
+    } else {
+        // فترة عابرة لمنتصف الليل Cross-Midnight (مثال: من 23:00 إلى 10:00 صباحاً)
+        return currentTime >= startTime || currentTime <= endTime;
+    }
+}
 
 /**
  * التحقق مما إذا كان الموظف نشطاً حالياً (ليس في إجازة وضمن ساعات وأيام عمله).
@@ -9,37 +52,28 @@ import ChangeLog from '../models/ChangeLog.js';
 export function isEmployeeActiveNow(employee) {
     if (!employee || employee.isOnLeave || !employee.is_active) return false;
 
-    const now = new Date();
+    const { currentTimeStr, currentDayArabic } = getEgyptTimeInfo();
     
-    // 1. تحقق من أيام العمل
+    // 1. تحقق من أيام العمل (إذا كانت مسجلة)
     if (employee.workDays) {
-        const daysOfWeek = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-        const currentDayArabic = daysOfWeek[now.getDay()];
-        const allowedDays = employee.workDays.split(',').map(d => d.trim());
-        if (!allowedDays.includes(currentDayArabic)) {
+        const allowedDays = employee.workDays.split(',').map(d => d.trim()).filter(Boolean);
+        if (allowedDays.length > 0 && !allowedDays.includes(currentDayArabic)) {
             return false;
         }
     }
 
-    // 2. تحقق من ساعات العمل
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
-
-    const startTime = employee.workStartTime || '09:00';
-    const endTime = employee.workEndTime || '17:00';
-
-    if (startTime <= endTime) {
-        return currentTimeStr >= startTime && currentTimeStr <= endTime;
-    } else {
-        return currentTimeStr >= startTime || currentTimeStr <= endTime;
+    // 2. تحقق من ساعات العمل (إذا كانت مسجلة)
+    if (employee.workStartTime && employee.workEndTime) {
+        return isTimeInShift(currentTimeStr, employee.workStartTime, employee.workEndTime);
     }
+
+    return true;
 }
 
 /**
- * تخصيص العميل تلقائياً لموظف مبيعات نشط (Round Robin) بناءً على الأقل عملاء.
+ * تخصيص العميل تلقائياً لموظف مبيعات نشط (بناءً على الشيفتات النشطة أو Round Robin للأقل عملاء).
  */
-export async function assignCustomerToSales(customerId, botOwnerId, io = null) {
+export async function assignCustomerToSales(customerId, botOwnerId, io = null, skipNotification = false, preserveStatus = false, forceReassign = false) {
     try {
         const customer = await Customer.findByPk(customerId);
         if (!customer) {
@@ -47,54 +81,144 @@ export async function assignCustomerToSales(customerId, botOwnerId, io = null) {
             return null;
         }
 
-        // 1. جلب كل الموظفين (Sales و Admin) التابعين للنظام
-        const employees = await User.findAll({
-            where: {
-                role: { [Op.in]: ['sales', 'admin'] },
-                is_active: true
-            }
-        });
-
-        // 2. تصفية الموظفين النشطين حالياً
-        const activeEmployees = employees.filter(isEmployeeActiveNow);
-
-        if (activeEmployees.length === 0) {
-            console.log(`⚠️ [Assignment] No active sales employees found for customer ID: ${customerId}`);
-            return null;
+        // 🛡️ إذا كان العميل معيناً بالفعل لموظف سيلز، لا يتم تغييره آلياً إلا إذا طُلب forceReassign
+        if (customer.assignedToUserId && !forceReassign) {
+            console.log(`🔒 [Assignment Guard] Customer ${customerId} is already assigned to User ${customer.assignedToUserId}. Skipping auto reassignment.`);
+            const existingRep = await User.findByPk(customer.assignedToUserId);
+            return existingRep;
         }
 
-        // 3. حساب عدد العملاء النشطين (وليس الناجحين أو غير المهتمين) المخصصين لكل موظف حالياً
-        const candidates = [];
-        for (const emp of activeEmployees) {
-            const activeCount = await Customer.count({
-                where: {
-                    assignedToUserId: emp.id,
-                    status: {
-                        [Op.notIn]: ['successful', 'not_interested']
+        // 1. فحص قواعد الشيفتات وتوزيع العملاء Multi-Shift Lead Routing Engine
+        let shiftRule = null;
+        try {
+            shiftRule = await getSetting('shift_split_rule', botOwnerId);
+            if (!shiftRule || !Array.isArray(shiftRule.shifts)) {
+                const superAdmin = await User.findOne({ where: { role: 'super_admin' } });
+                if (superAdmin && superAdmin.id !== botOwnerId) {
+                    shiftRule = await getSetting('shift_split_rule', superAdmin.id);
+                }
+            }
+        } catch (e) { console.error('Error getting lead routing rule', e); }
+
+        let selectedEmp = null;
+        let usedShiftSplit = false;
+
+        if (shiftRule && shiftRule.enabled) {
+            const { currentTimeStr, currentDayArabic: currentDay } = getEgyptTimeInfo();
+
+            let shiftsList = [];
+            if (Array.isArray(shiftRule.shifts) && shiftRule.shifts.length > 0) {
+                shiftsList = shiftRule.shifts;
+            }
+
+            for (let i = 0; i < shiftsList.length; i++) {
+                const shift = shiftsList[i];
+                const shiftDays = shift.days || [];
+                const inShiftDays = (shiftDays.length === 0 || shiftDays.includes(currentDay));
+                const inShiftTime = isTimeInShift(currentTimeStr, shift.startTime, shift.endTime);
+
+                if (inShiftDays && inShiftTime && Array.isArray(shift.employees) && shift.employees.length > 0) {
+                    const shiftEmployees = await User.findAll({
+                        where: { id: { [Op.in]: shift.employees }, is_active: true }
+                    });
+
+                    // استبعاد الموظفين في إجازة لو متوفر غيرهم
+                    const availableEmps = shiftEmployees.filter(e => !e.isOnLeave);
+                    const pool = availableEmps.length > 0 ? availableEmps : shiftEmployees;
+
+                    if (pool.length > 0) {
+                        const shiftKey = `last_assigned_shift_${shift.id || i}`;
+                        let lastIndex = -1;
+                        try {
+                            const idx = await getSetting(shiftKey, botOwnerId);
+                            const parsed = parseInt(idx, 10);
+                            if (!isNaN(parsed) && Number.isInteger(parsed) && parsed >= 0) {
+                                lastIndex = parsed;
+                            }
+                        } catch(e) {}
+
+                        let nextIndex = lastIndex + 1;
+                        if (isNaN(nextIndex) || nextIndex < 0 || nextIndex >= pool.length) {
+                            nextIndex = 0;
+                        }
+
+                        selectedEmp = pool[nextIndex] || pool[0];
+                        await setSetting(shiftKey, nextIndex, botOwnerId);
+                        usedShiftSplit = true;
+                        const empName = selectedEmp ? (selectedEmp.fullName || selectedEmp.username) : 'Unknown';
+                        console.log(`🎯 [LeadRouting] Active Shift [${shift.name || ('Shift ' + (i+1))}] matched (Cairo Time: ${currentTimeStr} ${currentDay}). Assigned to ${empName} (Pool: ${pool.length}, Index: ${nextIndex})`);
+                        break;
                     }
+                }
+            }
+
+            // إذا لم يتطابق أي شيفت، يتم التوجيه للموظف البديل الافتراضي إن وجد
+            if (!usedShiftSplit && shiftRule.defaultEmployeeId) {
+                const defaultEmp = await User.findOne({
+                    where: { id: shiftRule.defaultEmployeeId, is_active: true }
+                });
+                if (defaultEmp) {
+                    selectedEmp = defaultEmp;
+                    usedShiftSplit = true;
+                    console.log(`🎯 [LeadRouting] Off-Shift Hours (Cairo Time: ${currentTimeStr} ${currentDay}). Assigned to Default Fallback Rep: ${defaultEmp.fullName || defaultEmp.username}`);
+                }
+            }
+        }
+
+        // 2. إذا لم يتم استخدام نظام الشيفتات أو لم يطابق شيفت ولا يوجد بديل، نلجأ للتوزيع التلقائي العادي
+        let candidates = [];
+        if (!usedShiftSplit) {
+            const employees = await User.findAll({
+                where: {
+                    role: { [Op.in]: ['sales', 'admin'] },
+                    is_active: true
                 }
             });
 
-            // 4. التحقق من عدم تجاوز الحد الأقصى للموظف (تم تعطيله ليكون مفتوحاً دائماً)
-            candidates.push({
-                employee: emp,
-                activeCount
-            });
+            if (employees.length === 0) {
+                console.log(`⚠️ [Assignment] No active employees found for customer ID: ${customerId}`);
+                return null;
+            }
+
+            let targetEmployees = employees.filter(isEmployeeActiveNow);
+            let isFallback = false;
+
+            if (targetEmployees.length === 0) {
+                console.log(`⚠️ [Assignment] No active on-duty employees found. Falling back to all employees.`);
+                targetEmployees = employees;
+                isFallback = true;
+            }
+
+            for (const emp of targetEmployees) {
+                const activeCount = await Customer.count({
+                    where: {
+                        assignedToUserId: emp.id,
+                        status: { [Op.notIn]: ['successful', 'not_interested'] }
+                    }
+                });
+                candidates.push({ employee: emp, activeCount });
+            }
+
+            if (isFallback) {
+                const randomIndex = Math.floor(Math.random() * candidates.length);
+                selectedEmp = candidates[randomIndex].employee;
+            } else {
+                candidates.sort((a, b) => a.activeCount - b.activeCount);
+                selectedEmp = candidates[0].employee;
+            }
         }
 
-        if (candidates.length === 0) {
-            console.log(`⚠️ [Assignment] All active employees are at maximum customer capacity.`);
+        if (!selectedEmp) {
+            console.error(`⚠️ [Assignment] No valid employee selected for customer ID: ${customerId}`);
             return null;
         }
-
-        // 5. ترتيب المرشحين تصاعدياً حسب عدد العملاء الحاليين (Round Robin)
-        candidates.sort((a, b) => a.activeCount - b.activeCount);
-        const selectedEmp = candidates[0].employee;
 
         // 6. تخصيص العميل
         customer.assignedToUserId = selectedEmp.id;
         customer.assignedAt = new Date();
-        customer.status = 'awaiting_sales'; // تحويل لحالة انتظار المبيعات
+        if (!preserveStatus) {
+            customer.status = 'awaiting_sales'; // تحويل لحالة انتظار المبيعات
+        }
         await customer.save();
 
         // 7. تسجيل الإجراء في السجل
@@ -134,15 +258,17 @@ export async function assignCustomerToSales(customerId, botOwnerId, io = null) {
         }
 
         // إرسال إشعار لجروب الواتساب الخاص بالعمل
-        try {
-            const whatsappMsg = `📢 *تم تعيين عميل جديد تلقائياً!*\n\n👤 العميل: ${customer.customerName || 'عميل واتساب'}\n📞 الرقم: ${customer.phoneNumber}\n👨‍💼 الموظف المسؤول: ${selectedEmp.fullName || selectedEmp.username}\n🕐 وقت التعيين: ${new Date().toLocaleString('en-US', { hour12: true })}`;
-            const { sendWhatsAppNotification } = await import('./notificationService.js');
-            await sendWhatsAppNotification(botOwnerId, whatsappMsg);
-        } catch (wsErr) {
-            console.error('Error sending WhatsApp notification in auto-assignment:', wsErr);
+        if (!skipNotification) {
+            try {
+                const whatsappMsg = `📢 *تم تعيين عميل جديد تلقائياً!*\n\n👤 العميل: ${customer.customerName || 'عميل واتساب'}\n📞 الرقم: ${customer.phoneNumber}\n👨‍💼 الموظف المسؤول: ${selectedEmp.fullName || selectedEmp.username}\n🕐 وقت التعيين: ${new Date().toLocaleString('en-US', { hour12: true })}`;
+                const { sendWhatsAppNotification } = await import('./notificationService.js');
+                await sendWhatsAppNotification(botOwnerId, whatsappMsg);
+            } catch (wsErr) {
+                console.error('Error sending WhatsApp notification in auto-assignment:', wsErr);
+            }
         }
 
-        console.log(`✅ [Assignment] Customer ${customer.customerName || customer.phoneNumber} assigned to ${selectedEmp.fullName} (Active customers count: ${candidates[0].activeCount})`);
+        console.log(`✅ [Assignment] Customer ${customer.customerName || customer.phoneNumber} assigned to ${selectedEmp.fullName || selectedEmp.username}`);
         return selectedEmp;
     } catch (err) {
         console.error('Error in assignCustomerToSales service:', err);

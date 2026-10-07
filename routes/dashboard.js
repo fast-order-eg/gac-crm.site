@@ -1876,6 +1876,20 @@ router.get('/settings/check-group', async (req, res) => {
     }
 });
 
+// Helper to resolve the owner/primary admin of the system
+async function getOwnerUser(reqUser) {
+    try {
+        const superAdmin = await User.findOne({ where: { role: 'super_admin' } });
+        if (superAdmin) return superAdmin;
+
+        const adminUser = await User.findOne({ where: { role: 'admin' } });
+        if (adminUser) return adminUser;
+    } catch (err) {
+        console.error('Error finding owner user:', err);
+    }
+    return reqUser;
+}
+
 router.get('/employees', async (req, res) => {
     try {
         let Customer = null;
@@ -1909,10 +1923,52 @@ router.get('/employees', async (req, res) => {
             }
         }
 
+        // Fetch shift split rule using owner.id
+        let shiftSplitRule = null;
+        try {
+            const owner = await getOwnerUser(req.user);
+            shiftSplitRule = await getSetting('shift_split_rule', owner.id);
+            if (!shiftSplitRule || !Array.isArray(shiftSplitRule.shifts) || shiftSplitRule.shifts.length === 0) {
+                shiftSplitRule = {
+                    enabled: shiftSplitRule ? shiftSplitRule.enabled : true,
+                    defaultEmployeeId: (shiftSplitRule && shiftSplitRule.defaultEmployeeId) ? shiftSplitRule.defaultEmployeeId : null,
+                    shifts: [
+                        {
+                            id: 'shift_1',
+                            name: 'الفترة الصباحية',
+                            startTime: '10:00',
+                            endTime: '18:00',
+                            days: ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+                            employees: []
+                        },
+                        {
+                            id: 'shift_2',
+                            name: 'الفترة المسائية',
+                            startTime: '18:00',
+                            endTime: '23:00',
+                            days: ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'],
+                            employees: []
+                        },
+                        {
+                            id: 'shift_3',
+                            name: 'الفترة الليلية حتى الصباح',
+                            startTime: '23:00',
+                            endTime: '10:00',
+                            days: ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'],
+                            employees: []
+                        }
+                    ]
+                };
+            }
+        } catch (e) {
+            console.error('Error fetching shift split rule:', e);
+        }
+
         res.render('employees', {
             user: req.user,
             page: 'employees',
             employees,
+            shiftSplitRule,
             success_msg: req.flash('success_msg'),
             error_msg: req.flash('error_msg')
         });
@@ -1922,80 +1978,63 @@ router.get('/employees', async (req, res) => {
     }
 });
 
-// Helper to check for work schedule overlap
-function checkWorkOverlap(newStartTime, newEndTime, newDaysStr, existingEmployees) {
-    if (!newStartTime || !newEndTime || !newDaysStr) return null;
-    
-    const newDays = newDaysStr.split(',').map(d => d.trim()).filter(Boolean);
-    if (newDays.length === 0) return null;
+router.post('/employees/shift-split', async (req, res) => {
+    try {
+        const owner = await getOwnerUser(req.user);
+        if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
+            req.flash('error_msg', 'غير مصرح لك.');
+            return res.redirect('/dashboard/employees');
+        }
 
-    const timesOverlap = (s1, e1, s2, e2) => {
-        const toMins = (t) => {
-            const [h, m] = t.split(':').map(Number);
-            return h * 60 + m;
-        };
+        const { enabled, defaultEmployeeId, shiftsData } = req.body;
         
-        let start1 = toMins(s1);
-        let end1 = toMins(e1);
-        let start2 = toMins(s2);
-        let end2 = toMins(e2);
-        
-        const getIntervals = (start, end) => {
-            if (start <= end) {
-                return [{ start, end }];
-            } else {
-                return [
-                    { start, end: 1440 },
-                    { start: 0, end }
-                ];
-            }
-        };
-        
-        const int1s = getIntervals(start1, end1);
-        const int2s = getIntervals(start2, end2);
-        
-        for (const i1 of int1s) {
-            for (const i2 of int2s) {
-                if (i1.start < i2.end && i2.start < i1.end) {
-                    return true;
-                }
+        let shifts = [];
+        if (shiftsData) {
+            try {
+                shifts = JSON.parse(shiftsData);
+            } catch(e) {
+                console.error('Error parsing shiftsData:', e);
             }
         }
-        return false;
-    };
 
-    for (const emp of existingEmployees) {
-        if (!emp.workStartTime || !emp.workEndTime || !emp.workDays) continue;
-        const empDays = emp.workDays.split(',').map(d => d.trim()).filter(Boolean);
-        
-        const commonDays = newDays.filter(d => empDays.includes(d));
-        if (commonDays.length > 0) {
-            if (timesOverlap(newStartTime, newEndTime, emp.workStartTime, emp.workEndTime)) {
-                return {
-                    employeeName: emp.fullName || emp.username,
-                    commonDays: commonDays
-                };
-            }
+        // تنظيف والتحقق من صحة بيانات الشيفتات
+        if (Array.isArray(shifts)) {
+            shifts = shifts.map((s, idx) => ({
+                id: s.id || `shift_${idx + 1}_${Date.now()}`,
+                name: s.name ? s.name.trim() : `فترة ${idx + 1}`,
+                startTime: s.startTime || '09:00',
+                endTime: s.endTime || '17:00',
+                days: Array.isArray(s.days) ? s.days : [],
+                employees: Array.isArray(s.employees) ? s.employees.map(Number).filter(Boolean) : []
+            }));
+        } else {
+            shifts = [];
         }
+
+        const rule = {
+            enabled: enabled === 'on' || enabled === true || enabled === 'true',
+            shifts,
+            defaultEmployeeId: defaultEmployeeId ? Number(defaultEmployeeId) : null
+        };
+
+        await setSetting('shift_split_rule', rule, owner.id);
+        req.flash('success_msg', 'تم حفظ قواعد توزيع العملاء والشيفتات بنجاح.');
+        res.redirect('/dashboard/employees');
+    } catch (err) {
+        console.error('Error saving shift split rule:', err);
+        req.flash('error_msg', 'حدث خطأ أثناء حفظ الشيفتات.');
+        res.redirect('/dashboard/employees');
     }
-    return null;
-}
+});
 
 router.post('/employees/add', async (req, res) => {
     try {
-        const { fullName, phone, username, password, role, maxCustomers, workStartTime, workEndTime, workDays, substituteUserId } = req.body;
+        const { fullName, phone, username, password, role, maxCustomers, substituteUserId } = req.body;
 
         const existingUser = await User.findOne({ where: { username } });
         if (existingUser) {
             req.flash('error_msg', 'اسم المستخدم موجود بالفعل. يرجى اختيار اسم مستخدم آخر.');
             return res.redirect('/dashboard/employees');
-        }
-
-        // We no longer block on overlap. Admin has no schedule.
-        if (role === 'admin') {
-            workStartTime = null;
-            workEndTime = null;
-            workDays = null;
         }
 
         await User.create({
@@ -2005,9 +2044,9 @@ router.post('/employees/add', async (req, res) => {
             password,
             role,
             maxCustomers: parseInt(maxCustomers) || 999999,
-            workStartTime: workStartTime || '09:00',
-            workEndTime: workEndTime || '17:00',
-            workDays: workDays || 'السبت,الأحد,الإثنين,الثلاثاء,الأربعاء',
+            workStartTime: null,
+            workEndTime: null,
+            workDays: null,
             substituteUserId: substituteUserId ? parseInt(substituteUserId) : null,
             isOnLeave: false,
             is_active: true
@@ -2024,7 +2063,7 @@ router.post('/employees/add', async (req, res) => {
 
 router.post('/employees/edit', async (req, res) => {
     try {
-        const { id, fullName, phone, username, password, role, maxCustomers, workStartTime, workEndTime, workDays, substituteUserId } = req.body;
+        const { id, fullName, phone, username, password, role, maxCustomers, substituteUserId } = req.body;
 
         const employee = await User.findByPk(id);
         if (!employee) {
@@ -2040,22 +2079,12 @@ router.post('/employees/edit', async (req, res) => {
             }
         }
 
-        // We no longer block on overlap. Admin has no schedule.
-        if (role === 'admin') {
-            workStartTime = null;
-            workEndTime = null;
-            workDays = null;
-        }
-
         const updates = {
             fullName,
             phone,
             username,
             role,
             maxCustomers: parseInt(maxCustomers) || 999999,
-            workStartTime: workStartTime || '09:00',
-            workEndTime: workEndTime || '17:00',
-            workDays: workDays || 'السبت,الأحد,الإثنين,الثلاثاء,الأربعاء',
             substituteUserId: substituteUserId ? parseInt(substituteUserId) : null
         };
 
@@ -2086,6 +2115,30 @@ router.post('/employees/delete', async (req, res) => {
         if (employee.role === 'super_admin') {
             req.flash('error_msg', 'غير مسموح بحذف مدير النظام الرئيسي.');
             return res.redirect('/dashboard/employees');
+        }
+
+        // إزالة الموظف من الشيفتات تلقائياً حتى لا يتعطل توزيع البوت
+        try {
+            const owner = await getOwnerUser(req.user);
+            const shiftSplitRule = await getSetting('shift_split_rule', owner.id);
+            if (shiftSplitRule && Array.isArray(shiftSplitRule.shifts)) {
+                let changed = false;
+                shiftSplitRule.shifts.forEach(shift => {
+                    if (Array.isArray(shift.employees) && shift.employees.map(Number).includes(Number(id))) {
+                        shift.employees = shift.employees.map(Number).filter(empId => empId !== Number(id));
+                        changed = true;
+                    }
+                });
+                if (shiftSplitRule.defaultEmployeeId === Number(id)) {
+                    shiftSplitRule.defaultEmployeeId = null;
+                    changed = true;
+                }
+                if (changed) {
+                    await setSetting('shift_split_rule', shiftSplitRule, owner.id);
+                }
+            }
+        } catch (shiftErr) {
+            console.error('Error removing deleted employee from shift split:', shiftErr);
         }
 
         let Customer = null;

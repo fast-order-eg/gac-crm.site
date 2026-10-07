@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>إدارة الموظفين - GAC-CRM</title>
+    <title>إدارة الموظفين والشيفتات - GAC-CRM</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="/style.css?v=<%= Date.now() %>" rel="stylesheet">
@@ -17,23 +17,53 @@
             border-radius: 50px;
             font-weight: 600;
         }
-        .day-badge {
-            font-size: 11px;
-            padding: 2px 6px;
-            background: rgba(212, 175, 55, 0.1);
-            color: var(--primary-hover);
-            border: 1px solid rgba(212, 175, 55, 0.2);
-            border-radius: 4px;
-            display: inline-block;
-            margin: 2px;
+        
+        /* Day Check Pills in Modals & Shifts */
+        .day-select-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            background: #ffffff;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.15s ease-in-out;
         }
+        .day-select-pill:hover {
+            background: #f8fafc;
+            border-color: #94a3b8;
+        }
+        .day-select-pill:has(input:checked) {
+            background: #eff6ff;
+            border-color: #3b82f6;
+            color: #1d4ed8;
+            font-weight: 600;
+        }
+        
+        /* Fast snappy animations for collapsible cards */
+        .collapsing {
+            transition: height 0.16s ease-out !important;
+            will-change: height;
+        }
+        .collapse-arrow {
+            transition: transform 0.18s ease;
+        }
+        [role="button"][aria-expanded="true"] .collapse-arrow,
+        button[aria-expanded="true"] .collapse-arrow {
+            transform: rotate(180deg);
+        }
+
         .employee-card-mobile {
             background: #ffffff;
             border: 1px solid rgba(0, 0, 0, 0.08);
-            border-radius: 12px;
+            border-radius: 14px;
             padding: 1.25rem;
             margin-bottom: 1rem;
-            transition: all 0.3s;
+            transition: all 0.25s;
         }
         .employee-card-mobile:hover {
             box-shadow: 0 5px 15px rgba(0,0,0,0.05);
@@ -53,21 +83,7 @@
     <%- include('partials/navbar') %>
     <%- include('partials/sidebar') %>
 
-<%
-function formatTimeAMPM(timeStr) {
-    if (!timeStr) return '—';
-    const parts = timeStr.split(':');
-    if (parts.length < 2) return timeStr;
-    let hours = parseInt(parts[0], 10);
-    const m = parts[1];
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours}:${m} ${ampm}`;
-}
-%>
-
-    <div class="container-fluid main-content px-4 px-lg-5">
+    <div class="container-fluid main-content px-3 px-lg-5 py-3">
         
         <!-- Alerts -->
         <% if (typeof success_msg !== 'undefined' && success_msg && success_msg.length > 0) { %>
@@ -83,19 +99,240 @@ function formatTimeAMPM(timeStr) {
             </div>
         <% } %>
 
-        <div class="glass-card p-4 p-md-5 animate-fade-in">
-            <div class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4 gap-3">
-                <h2 class="m-0 fw-bold d-flex align-items-center gap-2">
-                    <i class="bi bi-people-fill text-primary"></i>
-                    إدارة الموظفين
-                </h2>
-                <button class="btn btn-primary px-4 rounded-pill shadow-sm d-flex align-items-center gap-2 fw-semibold" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
+        <div class="glass-card p-3 p-md-4 animate-fade-in">
+            <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center mb-4 gap-3">
+                <div>
+                    <h2 class="m-0 fw-bold d-flex align-items-center gap-2">
+                        <i class="bi bi-people-fill text-primary"></i>
+                        إدارة الموظفين والشيفتات
+                    </h2>
+                    <div class="text-muted small mt-1">
+                        إجمالي الموظفين: <strong class="text-dark"><%= employees.length %></strong>
+                        • النشطين: <strong class="text-success"><%= employees.filter(e => !e.isOnLeave).length %></strong>
+                    </div>
+                </div>
+                <button class="btn btn-primary px-4 py-2 rounded-pill shadow-sm d-flex align-items-center gap-2 fw-semibold" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
                     <i class="bi bi-person-plus-fill fs-5"></i>
-                    إضافة موظف جديد
+                    <span>إضافة موظف جديد</span>
                 </button>
             </div>
 
-            <div class="alert alert-warning empty-slots-info" style="display:none; font-size: 15px;"></div>
+            <!-- Empty Slots Analysis (Collapsible Card) -->
+            <div class="card mb-3 border-warning border-opacity-50 shadow-sm" id="emptySlotsContainer" style="display:none; background: #fffdf5; border-radius: 14px;">
+                <div class="card-body p-2.5 p-sm-3">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2" role="button" data-bs-toggle="collapse" data-bs-target="#emptySlotsCollapse" aria-expanded="false" style="cursor: pointer;">
+                        <div class="d-flex align-items-center gap-2.5">
+                            <div class="rounded-circle bg-warning bg-opacity-25 p-2 d-flex align-items-center justify-content-center" style="width: 36px; height: 36px; min-width: 36px;">
+                                <i class="bi bi-clock-history text-warning-emphasis fs-5"></i>
+                            </div>
+                            <div>
+                                <div style="font-size: 13px;" class="fw-bold text-dark">تغطية الشيفتات والأوقات غير المغطاة</div>
+                                <div class="text-muted" style="font-size: 10.5px;">فحص الأوقات المغطاة والفارغة أسبوعياً بناءً على تقسيمات الشيفتات</div>
+                            </div>
+                        </div>
+                        <span class="btn btn-sm btn-outline-warning rounded-pill px-2.5 py-1 fw-semibold d-flex align-items-center gap-1 shadow-xs" style="font-size: 11px;">
+                            <span>عرض</span>
+                            <i class="bi bi-chevron-down collapse-arrow"></i>
+                        </span>
+                    </div>
+                    <div class="collapse mt-2.5 pt-2.5 border-top border-warning border-opacity-25" id="emptySlotsCollapse">
+                        <div class="empty-slots-info-content"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lead Routing Rules Settings (For Admins only) -->
+            <% if (user.role === 'admin' || user.role === 'super_admin') { 
+                const rule = {
+                    enabled: (typeof shiftSplitRule !== 'undefined' && shiftSplitRule && shiftSplitRule.enabled !== false),
+                    shifts: (typeof shiftSplitRule !== 'undefined' && shiftSplitRule && shiftSplitRule.shifts && shiftSplitRule.shifts.length > 0) ? shiftSplitRule.shifts : [],
+                    defaultEmployeeId: (typeof shiftSplitRule !== 'undefined' && shiftSplitRule && shiftSplitRule.defaultEmployeeId) ? shiftSplitRule.defaultEmployeeId : null
+                };
+                const salesList = employees.filter(e => (e.role === 'sales' || e.role === 'admin') && e.is_active !== false);
+            %>
+            <div class="card mb-4 border-primary border-opacity-25 shadow-sm rounded-3" style="background: #f8fafc;">
+                <div class="card-header bg-white border-bottom py-2.5 px-3 d-flex flex-row justify-content-between align-items-center gap-2 rounded-top-3">
+                    <div class="d-flex align-items-center gap-2 min-w-0">
+                        <div class="rounded-circle bg-primary bg-opacity-10 text-primary p-1.5 d-flex align-items-center justify-content-center flex-shrink-0" style="width: 32px; height: 32px;">
+                            <i class="bi bi-diagram-3-fill fs-6"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <h6 class="fw-bold m-0 text-dark text-truncate" style="font-size: 13.5px;">توزيع العملاء والشيفتات</h6>
+                            <div class="text-muted text-truncate" style="font-size: 10.5px;">توزيع تلقائي للعملاء حسب مواعيد الشيفتات والأيام بتوقيت القاهرة</div>
+                        </div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary rounded-circle p-0 flex-shrink-0 d-flex align-items-center justify-content-center shadow-xs" type="button" data-bs-toggle="collapse" data-bs-target="#shiftSplitConfig" aria-expanded="<%= rule.enabled ? 'true' : 'false' %>" style="width: 32px; height: 32px;" title="إعداد الشيفتات">
+                        <i class="bi bi-sliders fs-6"></i>
+                    </button>
+                </div>
+                <div class="collapse <%= rule.enabled ? 'show' : '' %>" id="shiftSplitConfig">
+                    <div class="card-body p-2.5 p-sm-3">
+                        <form id="leadRoutingForm" action="/dashboard/employees/shift-split" method="POST" onsubmit="return submitShiftSplitForm()">
+                            <input type="hidden" name="shiftsData" id="shiftsDataInput">
+                            
+                            <!-- Master Switch -->
+                            <div class="p-2.5 px-3 bg-white border rounded-3 mb-2.5 d-flex align-items-center justify-content-between gap-2 shadow-xs">
+                                <div class="min-w-0">
+                                    <div class="fw-bold text-dark" style="font-size: 13px;">تفعيل نظام الشيفتات</div>
+                                    <div class="text-muted text-truncate" style="font-size: 10.5px;">توزيع العملاء آلياً بالتساوي (Round-Robin) على موظفي كل شيفت</div>
+                                </div>
+                                <div class="form-check form-switch m-0 p-0 flex-shrink-0 d-flex align-items-center">
+                                    <input class="form-check-input m-0 cursor-pointer" type="checkbox" role="switch" id="shiftEnabled" name="enabled" <%= rule.enabled ? 'checked' : '' %> style="width: 2.4em; height: 1.25em;">
+                                </div>
+                            </div>
+
+                            <!-- Shifts List Header -->
+                            <div class="d-flex justify-content-between align-items-center mb-2 px-1">
+                                <span class="fw-bold text-dark" style="font-size: 12px;">
+                                    <i class="bi bi-clock-history text-primary me-1"></i>الشيفتات المحددة:
+                                </span>
+                                <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-2 py-1 fw-semibold d-flex align-items-center gap-1 shadow-xs" onclick="addNewShift()" style="font-size: 11px;">
+                                    <i class="bi bi-plus-lg"></i>
+                                    <span>إضافة شيفت جديد</span>
+                                </button>
+                            </div>
+
+                            <div id="shiftsContainer" class="d-flex flex-column gap-2 mb-2.5">
+                                <% rule.shifts.forEach((s, sIdx) => { %>
+                                    <div class="card border rounded-3 bg-white shadow-xs shift-card" data-shift-id="<%= s.id || ('shift_' + (sIdx+1)) %>">
+                                        <div class="card-header bg-light bg-opacity-75 py-1.5 px-2.5 d-flex justify-content-between align-items-center gap-2">
+                                            <div class="d-flex align-items-center gap-1.5 flex-grow-1 min-w-0">
+                                                <span class="badge bg-primary rounded-pill px-2 py-1 fw-bold shift-num-badge flex-shrink-0" style="font-size: 10.5px;">شيفت <%= sIdx + 1 %></span>
+                                                <input type="text" class="form-control form-control-sm fw-bold border-0 bg-white rounded-2 px-2 py-0 shift-name-input shadow-xs flex-grow-1 min-w-0" value="<%= s.name || ('فترة ' + (sIdx+1)) %>" placeholder="اسم الشيفت" style="font-size: 11.5px; height: 26px;">
+                                            </div>
+                                            <button type="button" class="btn btn-sm btn-outline-danger border-0 rounded-circle p-0 d-flex align-items-center justify-content-center flex-shrink-0" onclick="deleteShift(this)" title="حذف هذا الشيفت" style="width: 26px; height: 26px;">
+                                                <i class="bi bi-trash3 text-danger" style="font-size: 12px;"></i>
+                                            </button>
+                                        </div>
+                                        <div class="card-body p-2.5">
+                                            <div class="row g-2">
+                                                <!-- Times -->
+                                                <div class="col-6">
+                                                    <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">من الساعة</label>
+                                                    <input type="time" class="form-control form-control-sm shift-start-time" value="<%= s.startTime %>" required style="font-size: 11.5px; height: 32px;">
+                                                </div>
+                                                <div class="col-6">
+                                                    <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">إلى الساعة</label>
+                                                    <input type="time" class="form-control form-control-sm shift-end-time" value="<%= s.endTime %>" required style="font-size: 11.5px; height: 32px;">
+                                                </div>
+
+                                                <!-- Days -->
+                                                <div class="col-12">
+                                                    <label class="form-label text-muted mb-1 d-block" style="font-size: 10.5px;">أيام العمل</label>
+                                                    <div class="d-flex flex-wrap gap-1">
+                                                        <% ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'].forEach(day => { 
+                                                            const isChecked = s.days ? s.days.includes(day) : false;
+                                                        %>
+                                                            <label class="day-select-pill" style="padding: 2px 7px; font-size: 10px;">
+                                                                <input class="form-check-input m-0 shift-day-check" type="checkbox" value="<%= day %>" <%= isChecked ? 'checked' : '' %>>
+                                                                <span><%= day %></span>
+                                                            </label>
+                                                        <% }) %>
+                                                    </div>
+                                                </div>
+
+                                                <!-- Employees -->
+                                                <div class="col-12">
+                                                    <label class="form-label text-muted mb-1 d-block" style="font-size: 10.5px;">موظفو الشيفت</label>
+                                                    <div class="d-flex flex-wrap gap-1 p-1.5 rounded-2 bg-light border">
+                                                        <% salesList.forEach(emp => { 
+                                                            const isEmpSelected = s.employees ? s.employees.includes(emp.id) : false;
+                                                        %>
+                                                            <label class="day-select-pill" style="padding: 3px 8px; font-size: 10.5px;">
+                                                                <input class="form-check-input m-0 shift-emp-check" type="checkbox" value="<%= emp.id %>" <%= isEmpSelected ? 'checked' : '' %>>
+                                                                <span class="fw-semibold text-dark">👤 <%= emp.fullName || emp.username %></span>
+                                                            </label>
+                                                        <% }) %>
+                                                        <% if (salesList.length === 0) { %>
+                                                            <span class="text-muted small">لا يوجد موظفو مبيعات متاحين</span>
+                                                        <% } %>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <% }) %>
+                            </div>
+
+                            <!-- Fallback / Default Rep -->
+                            <div class="p-2.5 px-3 border rounded-3 bg-white mb-2 shadow-xs">
+                                <div class="d-flex align-items-center gap-1.5 mb-1.5 text-primary fw-bold" style="font-size: 12px;">
+                                    <i class="bi bi-shield-check"></i>
+                                    <span>الموظف البديل (خارج الشيفتات)</span>
+                                </div>
+                                <div class="row g-2 align-items-center">
+                                    <div class="col-12 col-md-7">
+                                        <select class="form-select form-select-sm" name="defaultEmployeeId" style="font-size: 11.5px; height: 34px;">
+                                            <option value="">-- اختر الموظف البديل --</option>
+                                            <% salesList.forEach(emp => { %>
+                                                <option value="<%= emp.id %>" <%= (rule.defaultEmployeeId == emp.id) ? 'selected' : '' %>>
+                                                    👤 <%= emp.fullName || emp.username %> (<%= emp.role %>)
+                                                </option>
+                                            <% }) %>
+                                        </select>
+                                    </div>
+                                    <div class="col-12 col-md-5">
+                                        <button type="submit" class="btn btn-primary btn-sm w-100 py-1.5 fw-bold shadow-xs d-flex align-items-center justify-content-center gap-1.5" style="font-size: 12px; height: 34px;">
+                                            <i class="bi bi-check-circle-fill"></i>
+                                            <span>حفظ قواعد الشيفتات</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- New Shift Template (Hidden) -->
+            <template id="newShiftTemplate">
+                <div class="card border rounded-3 bg-white shadow-xs shift-card">
+                    <div class="card-header bg-light bg-opacity-75 py-1.5 px-2.5 d-flex justify-content-between align-items-center gap-2">
+                        <div class="d-flex align-items-center gap-1.5 flex-grow-1 min-w-0">
+                            <span class="badge bg-primary rounded-pill px-2 py-1 fw-bold shift-num-badge flex-shrink-0" style="font-size: 10.5px;">شيفت جديد</span>
+                            <input type="text" class="form-control form-control-sm fw-bold border-0 bg-white rounded-2 px-2 py-0 shift-name-input shadow-xs flex-grow-1 min-w-0" value="فترة جديدة" placeholder="اسم الشيفت" style="font-size: 11.5px; height: 26px;">
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger border-0 rounded-circle p-0 d-flex align-items-center justify-content-center flex-shrink-0" onclick="deleteShift(this)" title="حذف هذا الشيفت" style="width: 26px; height: 26px;">
+                            <i class="bi bi-trash3 text-danger" style="font-size: 12px;"></i>
+                        </button>
+                    </div>
+                    <div class="card-body p-2.5">
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">من الساعة</label>
+                                <input type="time" class="form-control form-control-sm shift-start-time" value="09:00" required style="font-size: 11.5px; height: 32px;">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label text-muted mb-0.5 d-block" style="font-size: 10.5px;">إلى الساعة</label>
+                                <input type="time" class="form-control form-control-sm shift-end-time" value="17:00" required style="font-size: 11.5px; height: 32px;">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label text-muted mb-1 d-block" style="font-size: 10.5px;">أيام العمل</label>
+                                <div class="d-flex flex-wrap gap-1">
+                                    <% ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'].forEach(day => { %>
+                                        <label class="day-select-pill" style="padding: 2px 7px; font-size: 10px;">
+                                            <input class="form-check-input m-0 shift-day-check" type="checkbox" value="<%= day %>" checked>
+                                            <span><%= day %></span>
+                                        </label>
+                                    <% }) %>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label text-muted mb-1 d-block" style="font-size: 10.5px;">موظفو الشيفت</label>
+                                <div class="d-flex flex-wrap gap-1 p-1.5 rounded-2 bg-light border">
+                                    <% salesList.forEach(emp => { %>
+                                        <label class="day-select-pill" style="padding: 3px 8px; font-size: 10.5px;">
+                                            <input class="form-check-input m-0 shift-emp-check" type="checkbox" value="<%= emp.id %>">
+                                            <span class="fw-semibold text-dark">👤 <%= emp.fullName || emp.username %></span>
+                                        </label>
+                                    <% }) %>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+            <% } %>
 
             <!-- Empty State -->
             <% if (employees.length === 0) { %>
@@ -116,8 +353,6 @@ function formatTimeAMPM(timeStr) {
                                 <th>اسم المستخدم</th>
                                 <th>الهاتف</th>
                                 <th>الدور</th>
-                                <th>مواعيد العمل</th>
-                                <th>أيام العمل</th>
                                 <th>الموظف البديل</th>
                                 <th class="text-center">العملاء الحاليين</th>
                                 <th class="text-center">الحالة</th>
@@ -143,23 +378,6 @@ function formatTimeAMPM(timeStr) {
                                             <span class="badge bg-warning text-dark rounded-pill">Admin</span>
                                         <% } else { %>
                                             <span class="badge bg-info text-white rounded-pill">Sales</span>
-                                        <% } %>
-                                    </td>
-                                    <td>
-                                        <span class="small text-secondary fw-semibold">
-                                            من: <%= formatTimeAMPM(emp.workStartTime) %><br>
-                                            إلى: <%= formatTimeAMPM(emp.workEndTime) %>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <% if (emp.workDays) { %>
-                                            <div class="d-flex flex-wrap gap-1" style="max-width: 180px;">
-                                                <% emp.workDays.split(',').forEach(day => { %>
-                                                    <span class="day-badge"><%= day.trim() %></span>
-                                                <% }) %>
-                                            </div>
-                                        <% } else { %>
-                                            <span class="text-muted small">—</span>
                                         <% } %>
                                     </td>
                                     <td>
@@ -191,9 +409,6 @@ function formatTimeAMPM(timeStr) {
                                                     data-username="<%= emp.username %>"
                                                     data-phone="<%= emp.phone || '' %>"
                                                     data-role="<%= emp.role %>"
-                                                    data-start="<%= emp.workStartTime || '09:00' %>"
-                                                    data-end="<%= emp.workEndTime || '17:00' %>"
-                                                    data-days="<%= emp.workDays || '' %>"
                                                     data-substitute="<%= emp.substituteUserId || '' %>"
                                                     data-max="<%= emp.maxCustomers %>"
                                                     title="تعديل">
@@ -201,7 +416,7 @@ function formatTimeAMPM(timeStr) {
                                             </button>
                                             
                                             <% if (emp.role !== 'super_admin') { %>
-                                                <form action="/dashboard/employees/delete" method="POST" class="m-0 d-inline" onsubmit="return confirm('هل أنت متأكد من حذف هذا الموظف؟ سيتم نقل عملائه للموظف البديل أو تصنيفهم كغير مخصصين.')">
+                                                <form action="/dashboard/employees/delete" method="POST" class="m-0 d-inline" onsubmit="return confirm('هل أنت متأكد من حذف هذا الموظف؟')">
                                                     <input type="hidden" name="id" value="<%= emp.id %>">
                                                     <button type="submit" class="btn btn-sm btn-outline-danger rounded px-2" title="حذف">
                                                         <i class="bi bi-trash3"></i>
@@ -243,24 +458,13 @@ function formatTimeAMPM(timeStr) {
                                     <strong>الموظف البديل:</strong> <%= emp.substituteUser ? emp.substituteUser.fullName : 'لا يوجد' %>
                                 </div>
                                 <div class="col-6">
-                                    <strong>مواعيد العمل:</strong><br>
-                                    من: <%= formatTimeAMPM(emp.workStartTime) %><br>
-                                    إلى: <%= formatTimeAMPM(emp.workEndTime) %>
-                                </div>
-                                <div class="col-6">
                                     <strong>العملاء الحاليين:</strong> <%= emp.customerCount || 0 %>
                                 </div>
-                                <div class="col-12">
-                                    <strong>أيام العمل:</strong>
-                                    <% if (emp.workDays) { %>
-                                        <div class="d-inline-flex flex-wrap gap-1 mt-1">
-                                            <% emp.workDays.split(',').forEach(day => { %>
-                                                <span class="day-badge"><%= day.trim() %></span>
-                                            <% }) %>
-                                        </div>
-                                    <% } else { %>
-                                        <span class="text-muted">—</span>
-                                    <% } %>
+                                <div class="col-6">
+                                    <strong>الحالة:</strong>
+                                    <span class="badge <%= emp.isOnLeave ? 'bg-danger' : 'bg-success' %> ms-1">
+                                        <%= emp.isOnLeave ? 'إجازة' : 'نشط' %>
+                                    </span>
                                 </div>
                             </div>
                             <div class="d-flex justify-content-between align-items-center mt-3 pt-2 border-top">
@@ -278,9 +482,6 @@ function formatTimeAMPM(timeStr) {
                                             data-username="<%= emp.username %>"
                                             data-phone="<%= emp.phone || '' %>"
                                             data-role="<%= emp.role %>"
-                                            data-start="<%= emp.workStartTime || '09:00' %>"
-                                            data-end="<%= emp.workEndTime || '17:00' %>"
-                                            data-days="<%= emp.workDays || '' %>"
                                             data-substitute="<%= emp.substituteUserId || '' %>"
                                             data-max="<%= emp.maxCustomers %>">
                                         <i class="bi bi-pencil-square"></i> تعديل
@@ -311,8 +512,7 @@ function formatTimeAMPM(timeStr) {
                     <h5 class="modal-title fw-bold" id="addEmployeeModalLabel">إضافة موظف جديد</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="alert alert-warning m-3 mb-0 empty-slots-info" style="display:none; font-size: 14px;"></div>
-                <form action="/dashboard/employees/add" method="POST" onsubmit="return submitAddForm()">
+                <form action="/dashboard/employees/add" method="POST">
                     <div class="modal-body p-4">
                         <div class="row g-3">
                             <div class="col-md-6">
@@ -333,40 +533,14 @@ function formatTimeAMPM(timeStr) {
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">دور الموظف (Role)</label>
-                                <select name="role" id="addRole" class="form-select" required onchange="toggleScheduleFields('add')">
+                                <select name="role" id="addRole" class="form-select" required>
                                     <option value="sales" selected>مبيعات (Sales)</option>
                                     <option value="admin">مدير (Admin)</option>
                                 </select>
                             </div>
                             <input type="hidden" name="maxCustomers" value="999999">
-                            <div class="col-12 add-schedule-fields">
-                                <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-bold">بداية وقت العمل</label>
-                                        <input type="time" name="workStartTime" class="form-control" value="09:00">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-bold">نهاية وقت العمل</label>
-                                        <input type="time" name="workEndTime" class="form-control" value="17:00">
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label fw-bold d-block">أيام العمل</label>
-                                        <div class="d-flex flex-wrap gap-3 mt-1">
-                                            <% ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'].forEach((day, index) => { %>
-                                                <div class="form-check">
-                                                    <input class="form-check-input add-day-check" type="checkbox" value="<%= day %>" id="addDay<%= index %>" <%= index < 5 ? 'checked' : '' %>>
-                                                    <label class="form-check-label" for="addDay<%= index %>">
-                                                        <%= day %>
-                                                    </label>
-                                                </div>
-                                            <% }) %>
-                                        </div>
-                                        <input type="hidden" name="workDays" id="addWorkDaysInput" value="السبت,الأحد,الإثنين,الثلاثاء,الأربعاء">
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-12">
-                                <label class="form-label fw-bold">الموظف البديل (في حالة الإجازة أو خارج أوقات العمل)</label>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">الموظف البديل (في حالة الإجازة)</label>
                                 <select name="substituteUserId" class="form-select">
                                     <option value="">-- لا يوجد موظف بديل --</option>
                                     <% employees.forEach(emp => { %>
@@ -393,8 +567,7 @@ function formatTimeAMPM(timeStr) {
                     <h5 class="modal-title fw-bold" id="editEmployeeModalLabel">تعديل بيانات الموظف</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="alert alert-warning m-3 mb-0 empty-slots-info" style="display:none; font-size: 14px;"></div>
-                <form action="/dashboard/employees/edit" method="POST" onsubmit="return submitEditForm()">
+                <form action="/dashboard/employees/edit" method="POST">
                     <input type="hidden" name="id" id="editId">
                     <div class="modal-body p-4">
                         <div class="row g-3">
@@ -416,40 +589,14 @@ function formatTimeAMPM(timeStr) {
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">دور الموظف (Role)</label>
-                                <select name="role" id="editRole" class="form-select" required onchange="toggleScheduleFields('edit')">
+                                <select name="role" id="editRole" class="form-select" required>
                                     <option value="sales">مبيعات (Sales)</option>
                                     <option value="admin">مدير (Admin)</option>
                                 </select>
                             </div>
                             <input type="hidden" name="maxCustomers" id="editMaxCustomers">
-                            <div class="col-12 edit-schedule-fields">
-                                <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-bold">بداية وقت العمل</label>
-                                        <input type="time" name="workStartTime" id="editWorkStartTime" class="form-control">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-bold">نهاية وقت العمل</label>
-                                        <input type="time" name="workEndTime" id="editWorkEndTime" class="form-control">
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label fw-bold d-block">أيام العمل</label>
-                                        <div class="d-flex flex-wrap gap-3 mt-1">
-                                            <% ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'].forEach((day, index) => { %>
-                                                <div class="form-check">
-                                                    <input class="form-check-input edit-day-check" type="checkbox" value="<%= day %>" id="editDay<%= index %>">
-                                                    <label class="form-check-label" for="editDay<%= index %>">
-                                                        <%= day %>
-                                                    </label>
-                                                </div>
-                                            <% }) %>
-                                        </div>
-                                        <input type="hidden" name="workDays" id="editWorkDaysInput">
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-12">
-                                <label class="form-label fw-bold">الموظف البديل (في حالة الإجازة أو خارج أوقات العمل)</label>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">الموظف البديل (في حالة الإجازة)</label>
                                 <select name="substituteUserId" id="editSubstituteUserId" class="form-select">
                                     <option value="">-- لا يوجد موظف بديل --</option>
                                     <% employees.forEach(emp => { %>
@@ -470,20 +617,6 @@ function formatTimeAMPM(timeStr) {
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // دالة تجميع أيام العمل للنموذج الأول
-        function submitAddForm() {
-            const checkedDays = Array.from(document.querySelectorAll('.add-day-check:checked')).map(el => el.value);
-            document.getElementById('addWorkDaysInput').value = checkedDays.join(',');
-            return true;
-        }
-
-        // دالة تجميع أيام العمل للنموذج الثاني
-        function submitEditForm() {
-            const checkedDays = Array.from(document.querySelectorAll('.edit-day-check:checked')).map(el => el.value);
-            document.getElementById('editWorkDaysInput').value = checkedDays.join(',');
-            return true;
-        }
-
         // دالة فتح مودال التعديل وتعبئة البيانات
         function editEmployee(btn) {
             const id = btn.getAttribute('data-id');
@@ -491,9 +624,6 @@ function formatTimeAMPM(timeStr) {
             const username = btn.getAttribute('data-username');
             const phone = btn.getAttribute('data-phone');
             const role = btn.getAttribute('data-role');
-            const start = btn.getAttribute('data-start');
-            const end = btn.getAttribute('data-end');
-            const days = btn.getAttribute('data-days');
             const substitute = btn.getAttribute('data-substitute');
             const max = btn.getAttribute('data-max');
 
@@ -502,17 +632,13 @@ function formatTimeAMPM(timeStr) {
             document.getElementById('editUsername').value = username;
             document.getElementById('editPhone').value = phone;
             document.getElementById('editRole').value = role;
-            document.getElementById('editWorkStartTime').value = start;
-            document.getElementById('editWorkEndTime').value = end;
             document.getElementById('editMaxCustomers').value = max;
             document.getElementById('editPassword').value = ''; // إفراغ كلمة المرور
-            document.getElementById('editWorkDaysInput').value = days;
 
             // إخفاء الموظف نفسه من قائمة البدلاء لمنع الاختيار الخاطئ
             const subDropdown = document.getElementById('editSubstituteUserId');
             subDropdown.value = substitute;
             
-            // تحديث خيارات البدلاء لإخفاء الموظف الحالي
             const options = subDropdown.querySelectorAll('option');
             options.forEach(opt => {
                 if (opt.value === id) {
@@ -522,103 +648,248 @@ function formatTimeAMPM(timeStr) {
                 }
             });
 
-            // تعبئة مربعات الاختيار للأيام
-            const dayList = days.split(',').map(d => d.trim());
-            const checkboxes = document.querySelectorAll('.edit-day-check');
-            checkboxes.forEach(chk => {
-                chk.checked = dayList.includes(chk.value);
-            });
-
             const editModal = new bootstrap.Modal(document.getElementById('editEmployeeModal'));
             editModal.show();
         }
 
-        const allSalesEmployees = <%- JSON.stringify(employees.filter(e => e.role === 'sales' && e.is_active !== false)) %>;
-
+        // ================= Multi-Shift Coverage & Lead Routing Handlers =================
         function calculateEmptySlots() {
             const days = ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
-            let emptySlotsHtml = '<strong>الأوقات الفارغة (غير المغطاة بالمبيعات):</strong><ul class="mb-0 ps-3 mt-1">';
+            const masterSwitch = document.getElementById('shiftEnabled');
+            const isShiftsEnabled = masterSwitch ? masterSwitch.checked : true;
+
+            const cards = document.querySelectorAll('.shift-card');
+            const activeShifts = [];
+            cards.forEach(card => {
+                const startInput = card.querySelector('.shift-start-time');
+                const endInput = card.querySelector('.shift-end-time');
+                const dayChecks = card.querySelectorAll('.shift-day-check:checked');
+                const empChecks = card.querySelectorAll('.shift-emp-check:checked');
+
+                const startTime = startInput ? startInput.value : '';
+                const endTime = endInput ? endInput.value : '';
+                const shiftDays = Array.from(dayChecks).map(c => c.value);
+                const shiftEmployees = Array.from(empChecks).map(c => c.value);
+
+                if (startTime && endTime && shiftDays.length > 0 && shiftEmployees.length > 0) {
+                    activeShifts.push({
+                        startTime,
+                        endTime,
+                        days: shiftDays,
+                        employees: shiftEmployees
+                    });
+                }
+            });
+
+            if (!isShiftsEnabled) {
+                return {
+                    hasEmpty: true,
+                    html: `
+                        <div class="alert alert-warning mb-0 py-2 px-3 small rounded-3 d-flex align-items-center gap-2">
+                            <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+                            <div>نظام الشيفتات معطل حالياً. يتم التوزيع التلقائي العادي على موظفي المبيعات المتاحين.</div>
+                        </div>
+                    `
+                };
+            }
+
+            if (activeShifts.length === 0) {
+                return {
+                    hasEmpty: true,
+                    html: `
+                        <div class="alert alert-danger mb-0 py-2 px-3 small rounded-3 d-flex align-items-center gap-2">
+                            <i class="bi bi-x-octagon-fill fs-5"></i>
+                            <div>لم يتم تحديد أي شيفتات نشطة تحتوي على موظفين. جميع الأوقات غير مغطاة حالياً!</div>
+                        </div>
+                    `
+                };
+            }
+
             let hasEmpty = false;
-            
+            let cardsHtml = '<div class="row g-2">';
+
+            const toMins = t => {
+                const [h, m] = t.split(':').map(Number);
+                return (h * 60) + m;
+            };
+
+            const formatTime = mins => {
+                let h = Math.floor(mins / 60);
+                const m = (mins % 60).toString().padStart(2, '0');
+                const period = h >= 12 ? 'م' : 'ص';
+                let h12 = h % 12;
+                if (h12 === 0) h12 = 12;
+                return `${h12.toString().padStart(2, '0')}:${m} ${period}`;
+            };
+
             days.forEach(day => {
                 let intervals = [];
-                allSalesEmployees.forEach(emp => {
-                    if (emp.workDays && emp.workDays.includes(day) && emp.workStartTime && emp.workEndTime) {
-                        const toMins = t => { const [h,m] = t.split(':'); return parseInt(h)*60 + parseInt(m); };
-                        let start = toMins(emp.workStartTime);
-                        let end = toMins(emp.workEndTime);
-                        if (start <= end) {
-                            intervals.push({start, end});
+
+                activeShifts.forEach(shift => {
+                    if (shift.days.includes(day)) {
+                        let start = toMins(shift.startTime);
+                        let end = toMins(shift.endTime);
+
+                        if (start < end) {
+                            intervals.push({ start, end });
+                        } else if (start > end) {
+                            // شيفت عابر لمنتصف الليل Cross-Midnight
+                            intervals.push({ start, end: 1440 });
+                            intervals.push({ start: 0, end });
                         } else {
-                            intervals.push({start, end: 1440});
-                            intervals.push({start: 0, end});
+                            intervals.push({ start: 0, end: 1440 });
                         }
                     }
                 });
-                
-                intervals.sort((a,b) => a.start - b.start);
+
+                intervals.sort((a, b) => a.start - b.start);
                 let merged = [];
                 if (intervals.length > 0) {
-                    let current = intervals[0];
+                    let current = { ...intervals[0] };
                     for (let i = 1; i < intervals.length; i++) {
                         if (intervals[i].start <= current.end) {
                             current.end = Math.max(current.end, intervals[i].end);
                         } else {
                             merged.push(current);
-                            current = intervals[i];
+                            current = { ...intervals[i] };
                         }
                     }
                     merged.push(current);
                 }
-                
+
                 let gaps = [];
                 let curTime = 0;
                 merged.forEach(inter => {
                     if (inter.start > curTime) {
-                        gaps.push({start: curTime, end: inter.start});
+                        gaps.push({ start: curTime, end: inter.start });
                     }
                     curTime = Math.max(curTime, inter.end);
                 });
                 if (curTime < 1440) {
-                    gaps.push({start: curTime, end: 1440});
+                    gaps.push({ start: curTime, end: 1440 });
                 }
-                
-                const formatTime = mins => {
-                    const h = Math.floor(mins / 60).toString().padStart(2, '0');
-                    const m = (mins % 60).toString().padStart(2, '0');
-                    return `${h}:${m}`;
-                };
-                
+
                 if (gaps.length > 0) {
                     hasEmpty = true;
-                    let gapStrs = gaps.map(g => `${formatTime(g.start)} - ${formatTime(g.end)}`);
-                    emptySlotsHtml += `<li><strong>${day}:</strong> ${gapStrs.join(' و ')}</li>`;
+                    const isAllDayEmpty = (gaps.length === 1 && gaps[0].start === 0 && gaps[0].end === 1440);
+                    let gapBadges = '';
+                    if (isAllDayEmpty) {
+                        gapBadges = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1"><i class="bi bi-x-circle me-1"></i>غير مغطى طوال اليوم (24 ساعة)</span>`;
+                    } else {
+                        gapBadges = gaps.map(g => `<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle px-2 py-1"><i class="bi bi-clock me-1"></i>غير مغطى: ${formatTime(g.start)} إلى ${formatTime(g.end)}</span>`).join(' ');
+                    }
+
+                    cardsHtml += `
+                        <div class="col-12 col-md-6">
+                            <div class="p-2.5 rounded-3 bg-white border border-warning-subtle d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center gap-1.5 shadow-xs">
+                                <span class="fw-bold text-dark small d-flex align-items-center gap-1.5" style="min-width: 75px;">
+                                    <span class="badge bg-secondary-subtle text-dark border px-2 py-1">${day}</span>
+                                </span>
+                                <div class="d-flex flex-wrap gap-1">${gapBadges}</div>
+                            </div>
+                        </div>`;
                 } else {
-                    emptySlotsHtml += `<li><strong>${day}:</strong> <span class="text-success">مغطى بالكامل</span></li>`;
+                    cardsHtml += `
+                        <div class="col-12 col-md-6">
+                            <div class="p-2.5 rounded-3 bg-white border border-success-subtle d-flex justify-content-between align-items-center shadow-xs">
+                                <span class="fw-bold text-dark small d-flex align-items-center gap-1.5" style="min-width: 75px;">
+                                    <span class="badge bg-secondary-subtle text-dark border px-2 py-1">${day}</span>
+                                </span>
+                                <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1"><i class="bi bi-check-circle-fill me-1"></i>مغطى بالكامل (24 ساعة)</span>
+                            </div>
+                        </div>`;
                 }
             });
-            
-            emptySlotsHtml += '</ul>';
-            return emptySlotsHtml;
+            cardsHtml += '</div>';
+
+            return { hasEmpty, html: cardsHtml };
         }
 
-        function toggleScheduleFields(modalType) {
-            const role = document.getElementById(modalType + 'Role').value;
-            const scheduleDivs = document.querySelectorAll('.' + modalType + '-schedule-field');
-            if (role === 'admin') {
-                document.querySelector('.' + modalType + '-schedule-fields').style.display = 'none';
-            } else {
-                document.querySelector('.' + modalType + '-schedule-fields').style.display = 'block';
+        function refreshEmptySlots() {
+            const emptyData = calculateEmptySlots();
+            const container = document.getElementById('emptySlotsContainer');
+            const contentEl = document.querySelector('.empty-slots-info-content');
+            if (container && contentEl) {
+                contentEl.innerHTML = emptyData.html;
+                container.style.display = 'block';
             }
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            const emptyHtml = calculateEmptySlots();
-            document.querySelectorAll('.empty-slots-info').forEach(el => {
-                el.innerHTML = emptyHtml;
-                el.style.display = 'block';
+        function addNewShift() {
+            const template = document.getElementById('newShiftTemplate');
+            if (!template) return;
+            const clone = template.content.cloneNode(true);
+            const card = clone.querySelector('.shift-card');
+            card.setAttribute('data-shift-id', 'shift_' + Date.now());
+            document.getElementById('shiftsContainer').appendChild(clone);
+            updateShiftBadges();
+            refreshEmptySlots();
+        }
+
+        function deleteShift(btn) {
+            const cards = document.querySelectorAll('.shift-card');
+            if (cards.length <= 1) {
+                alert('يجب الإبقاء على شيفت واحد على الأقل في النظام.');
+                return;
+            }
+            if (confirm('هل تريد بالتأكيد حذف هذا الشيفت؟')) {
+                const card = btn.closest('.shift-card');
+                if (card) {
+                    card.remove();
+                    updateShiftBadges();
+                    refreshEmptySlots();
+                }
+            }
+        }
+
+        function updateShiftBadges() {
+            const cards = document.querySelectorAll('.shift-card');
+            cards.forEach((card, idx) => {
+                const badge = card.querySelector('.shift-num-badge');
+                if (badge) badge.textContent = `شيفت ${idx + 1}`;
             });
-            toggleScheduleFields('add');
+        }
+
+        function submitShiftSplitForm() {
+            const cards = document.querySelectorAll('.shift-card');
+            const shifts = [];
+            cards.forEach((card, idx) => {
+                const id = card.getAttribute('data-shift-id') || `shift_${idx + 1}`;
+                const nameInput = card.querySelector('.shift-name-input');
+                const startInput = card.querySelector('.shift-start-time');
+                const endInput = card.querySelector('.shift-end-time');
+                const dayChecks = card.querySelectorAll('.shift-day-check:checked');
+                const empChecks = card.querySelectorAll('.shift-emp-check:checked');
+
+                const days = Array.from(dayChecks).map(c => c.value);
+                const employees = Array.from(empChecks).map(c => Number(c.value));
+
+                shifts.push({
+                    id,
+                    name: (nameInput && nameInput.value.trim()) ? nameInput.value.trim() : `فترة ${idx + 1}`,
+                    startTime: startInput ? startInput.value : '09:00',
+                    endTime: endInput ? endInput.value : '17:00',
+                    days,
+                    employees
+                });
+            });
+
+            document.getElementById('shiftsDataInput').value = JSON.stringify(shifts);
+            return true;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshEmptySlots();
+
+            const shiftsContainer = document.getElementById('shiftsContainer');
+            if (shiftsContainer) {
+                shiftsContainer.addEventListener('input', refreshEmptySlots);
+                shiftsContainer.addEventListener('change', refreshEmptySlots);
+            }
+            const shiftSwitch = document.getElementById('shiftEnabled');
+            if (shiftSwitch) {
+                shiftSwitch.addEventListener('change', refreshEmptySlots);
+            }
         });
     </script>
 </body>

@@ -26,6 +26,7 @@ import { vertexQueue } from '../services/queueService.js';
 import { whatsappQueue } from '../services/whatsappQueueService.js';
 import { funnelDefaults } from '../config/funnelDefaults.js';
 import { getSetting as getSystemSetting } from '../services/settingsService.js';
+import { getEgyptTimeInfo, isTimeInShift } from '../services/assignmentService.js';
 
 // V6_STABLE_VERSION
 console.log("✅ [V6_SIGNATURE] botController.js Loaded");
@@ -3559,33 +3560,24 @@ export async function notifyControlGroup(userId, message) {
  * التحقق مما إذا كان الموظف نشطاً حالياً (ليس في إجازة وضمن ساعات وأيام عمله).
  */
 export function isEmployeeActiveNow(employee) {
-    if (!employee || employee.isOnLeave) return false;
+    if (!employee || employee.isOnLeave || employee.is_active === false) return false;
 
-    const now = new Date();
+    const { currentTimeStr, currentDayArabic } = getEgyptTimeInfo();
     
     // 1. تحقق من أيام العمل
     if (employee.workDays) {
-        const daysOfWeek = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-        const currentDayArabic = daysOfWeek[now.getDay()];
-        const allowedDays = employee.workDays.split(',').map(d => d.trim());
-        if (!allowedDays.includes(currentDayArabic)) {
+        const allowedDays = employee.workDays.split(',').map(d => d.trim()).filter(Boolean);
+        if (allowedDays.length > 0 && !allowedDays.includes(currentDayArabic)) {
             return false;
         }
     }
 
     // 2. تحقق من ساعات العمل
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
-
-    const startTime = employee.workStartTime || '09:00';
-    const endTime = employee.workEndTime || '17:00';
-
-    if (startTime <= endTime) {
-        return currentTimeStr >= startTime && currentTimeStr <= endTime;
-    } else {
-        return currentTimeStr >= startTime || currentTimeStr <= endTime;
+    if (employee.workStartTime && employee.workEndTime) {
+        return isTimeInShift(currentTimeStr, employee.workStartTime, employee.workEndTime);
     }
+
+    return true;
 }
 
 /**
