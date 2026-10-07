@@ -166,7 +166,7 @@
                         const phoneFromJid = (!isLid && c.remoteJid.endsWith('@s.whatsapp.net')) ? c.remoteJid.split('@')[0] : '';
                         const phone = c.phoneNumber || phoneFromJid;
                         const nm = c.customerName || phone || (isLid ? 'عميل' : c.remoteJid.split('@')[0]);
-                        const ts = new Date(c.lastMessageAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true});
+                        const ts = new Date(c.lastMessageAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'});
                     %>
                     <div class="lc-item"
                          data-jid="<%= c.remoteJid %>"
@@ -275,7 +275,7 @@
         if (el) {
             el.querySelector('.lc-prev').textContent = content;
             const tEl = el.querySelector('.lc-t');
-            if (tEl) tEl.textContent = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true});
+            if (tEl) tEl.textContent = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'});
             if (el.parentElement) el.parentElement.prepend(el);
         }
         if (msg.remoteJid === curJid) {
@@ -400,7 +400,7 @@
         const box = document.getElementById('lcMsgs');
         const d = document.createElement('div');
         d.className = `lc-bbl ${isIn ? 'bbl-in' : 'bbl-out'}`;
-        const t = date ? date.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '';
+        const t = date ? date.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'}) : '';
 
         let contentHtml = '';
         if (mediaUrl) {
