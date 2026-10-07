@@ -19,6 +19,7 @@ import SimulationMessage from '../models/SimulationMessage.js';
 import TeachMessage from '../models/TeachMessage.js';
 import ChangeLog from '../models/ChangeLog.js';
 import Campaign from '../models/Campaign.js';
+import SystemSettings from '../models/SystemSettings.js';
 import * as notificationService from '../services/notificationService.js';
 import { Op, Sequelize } from 'sequelize';
 import { GoogleAuth } from 'google-auth-library';
@@ -786,12 +787,62 @@ async function handleOrderCompletion(sock, customerJid, lastMessage, aiResponse,
 }
 
 // ======================================================
+// 🔘 فحص شامل لحالة تعطيل الأزرار والقوائم في النظام
+// ======================================================
+export async function isButtonsDisabled(userId, user = null) {
+    try {
+        if (!user && userId) {
+            user = await User.findByPk(userId);
+        }
+
+        // 1. فحص إعداد المستخدم المباشر
+        if (user && (user.buttons_disabled === true || user.buttons_disabled === 1 || user.buttons_disabled === '1')) {
+            return true;
+        }
+
+        // 2. فحص إعدادات النظام العامة system_settings
+        try {
+            const sysSetting = await SystemSettings.findOne({
+                where: { settingKey: 'buttons_disabled' }
+            });
+            if (sysSetting && (sysSetting.settingValue === 'true' || sysSetting.settingValue === '1')) {
+                return true;
+            }
+        } catch (e) {}
+
+        // 3. فحص إذا كان أي أدمن أو سوبر أدمن قد عطل الأزرار
+        const adminDisabled = await User.findOne({
+            where: {
+                role: ['admin', 'super_admin'],
+                buttons_disabled: true
+            }
+        });
+        if (adminDisabled) {
+            return true;
+        }
+
+        // 4. فحص ما إذا كانت هناك أي قوائم نشطة أصلاً
+        const activeMenuCount = await InteractiveMenu.count({
+            where: { isActive: true }
+        });
+        if (activeMenuCount === 0) {
+            return true;
+        }
+
+        return false;
+    } catch (err) {
+        console.error('Error in isButtonsDisabled:', err);
+        return user ? (user.buttons_disabled === true || user.buttons_disabled === 1) : false;
+    }
+}
+
+// ======================================================
 // 🔘 Interactive Buttons — إرسال الأزرار التفاعلية للعميل
 // ======================================================
 async function sendInteractiveButtons(sock, remoteJid, userId, io, menuId = null, customerName = null) {
     try {
         const user = await User.findByPk(userId);
-        if (user && user.buttons_disabled) {
+        if (await isButtonsDisabled(userId, user)) {
             console.log(`🔘 [Buttons-Disabled] Skipped sending menu because buttons are disabled for user ${userId}`);
             return false;
         }
@@ -800,19 +851,19 @@ async function sendInteractiveButtons(sock, remoteJid, userId, io, menuId = null
 
         if (menuId) {
             menu = await InteractiveMenu.findOne({
-                where: { id: menuId, UserId: userId, isActive: true }
+                where: { id: menuId, isActive: true }
             });
         }
 
         if (!menu) {
             // Fallback: Find default menu, or first created menu if no default
             menu = await InteractiveMenu.findOne({
-                where: { UserId: userId, isDefault: true, isActive: true }
+                where: { isDefault: true, isActive: true }
             });
 
             if (!menu) {
                 menu = await InteractiveMenu.findOne({
-                    where: { UserId: userId, isActive: true },
+                    where: { isActive: true },
                     order: [['createdAt', 'ASC']]
                 });
             }
@@ -1815,6 +1866,9 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         const user = await User.findByPk(userId);
         if (!user) return;
 
+        // فحص هل ردود الأزرار والقوائم معطلة بالكامل في السيستم
+        const buttonsStopped = await isButtonsDisabled(userId, user);
+
         // Resolve the best remoteJid (prefer phone-based @s.whatsapp.net over @lid)
         const remoteJid = resolveRemoteJid(msg.key);
         const phoneNumber = extractPhoneNumber(msg.key, msg);
@@ -1884,7 +1938,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         // === End Button Response Handling ===
 
         // === Text Menu Numeric Fallback Parser ===
-        if (text && !isNaN(text.trim()) && text.trim() !== '' && !remoteJid.endsWith('@g.us')) {
+        if (!buttonsStopped && text && !isNaN(text.trim()) && text.trim() !== '' && !remoteJid.endsWith('@g.us')) {
             const userChoice = parseInt(text.trim());
             // Find last bot message to this user that was a MENU
             const lastBotMsg = await Message.findOne({
@@ -1994,11 +2048,11 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         // === End Incoming Message Notification ===
 
         // === Interactive Buttons: Check for trigger words ===
-        if (text && !remoteJid.endsWith('@g.us') && user.bot_mode !== 'ai_only' && !user.buttons_disabled) {
+        if (text && !remoteJid.endsWith('@g.us') && user.bot_mode !== 'ai_only' && !buttonsStopped) {
             const normalizedText = text.trim().toLowerCase();
             
-            // Fetch all active menus for this user
-            const menus = await InteractiveMenu.findAll({ where: { UserId: userId, isActive: true } });
+            // Fetch all active menus
+            const menus = await InteractiveMenu.findAll({ where: { isActive: true } });
             
             let matchedMenuId = null;
             for (const menu of menus) {
@@ -2253,7 +2307,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             isNewCustomer = isFirstConversation;
 
             // === Interactive Buttons: Send to NEW customers in Menu-Only mode ===
-            if (isFirstConversation && user.bot_mode === 'menu_only' && !user.buttons_disabled) {
+            if (isFirstConversation && user.bot_mode === 'menu_only' && !buttonsStopped) {
                 const sent = await sendInteractiveButtons(sock, remoteJid, userId, io, null, conversation?.customerName || pushName);
                 if (sent) return; // Buttons sent to new customer, skip further processing
             }
@@ -2315,72 +2369,77 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         }
 
         // ======================================================
-        // 🔒 Menu-Only Mode — وضع القوائم فقط
+        // 🚨 Handoff Check — طلب تحويل للمبيعات (متاح دائماً)
         // ======================================================
-        if (user.bot_mode === 'menu_only' && !user.buttons_disabled && text && !remoteJid.endsWith('@g.us')) {
-            const normalizedFreeText = text.trim().toLowerCase();
+        const normalizedFreeText = text ? text.trim().toLowerCase() : '';
+        const agentKeywords = ['مبيعات', 'موظف', 'خدمة عملاء', 'بشري', 'agent', 'human', 'مساعدة', 'خدمة', 'خدمه', 'عملاء', 'عملا'];
+        const wantsAgent = text && !remoteJid.endsWith('@g.us') && agentKeywords.some(k => normalizedFreeText.includes(k));
+        
+        if (wantsAgent) {
+            // Trigger handoff to human
+            await Conversation.update({ is_handoff: true }, { where: { UserId: userId, remoteJid } });
+            console.log(`[Handoff] ✅ Handoff triggered for ${remoteJid} (user requested agent: "${text}").`);
             
-            // Check if user wants to talk to a human agent
-            const agentKeywords = ['مبيعات', 'موظف', 'خدمة عملاء', 'بشري', 'agent', 'human', 'مساعدة', 'خدمة', 'خدمه', 'عملاء', 'عملا'];
-            const wantsAgent = agentKeywords.some(k => normalizedFreeText.includes(k));
-            
-            if (wantsAgent) {
-                // Trigger handoff to human
-                await Conversation.update({ is_handoff: true }, { where: { UserId: userId, remoteJid } });
-                console.log(`[Menu-Only] ✅ Handoff triggered for ${remoteJid} (user requested agent).`);
-                
-                // Assign customer using Round Robin
-                let assignedSalesName = 'أحد ممثلي المبيعات';
-                try {
-                    const { assignCustomerToSales } = await import('../services/assignmentService.js');
-                    const assignedEmp = await assignCustomerToSales(conversation.CustomerId, userId);
-                    if (assignedEmp) {
-                        assignedSalesName = assignedEmp.fullName;
-                    }
-                } catch (assignErr) {
-                    console.error("Error assigning customer to sales in menu-only handoff:", assignErr);
+            // Assign customer using Round Robin
+            let assignedSalesName = 'أحد ممثلي المبيعات';
+            try {
+                const { assignCustomerToSales } = await import('../services/assignmentService.js');
+                const assignedEmp = await assignCustomerToSales(conversation.CustomerId, userId);
+                if (assignedEmp) {
+                    assignedSalesName = assignedEmp.fullName;
                 }
+            } catch (assignErr) {
+                console.error("Error assigning customer to sales in handoff:", assignErr);
+            }
 
-                const handoffMsg = `جاري تحويلك إلى ${assignedSalesName}. يرجى الانتظار 🙏`;
-                await sendHumanMessage(sock, remoteJid, { text: handoffMsg }, { userId });
-                const svHandoff = await Message.create({ UserId: userId, remoteJid, role: 'model', content: handoffMsg });
-                io.to(`user_${userId}`).emit('new_message', svHandoff);
+            const handoffMsg = `جاري تحويلك إلى ${assignedSalesName}. يرجى الانتظار 🙏`;
+            await sendHumanMessage(sock, remoteJid, { text: handoffMsg }, { userId });
+            const svHandoff = await Message.create({ UserId: userId, remoteJid, role: 'model', content: handoffMsg });
+            io.to(`user_${userId}`).emit('new_message', svHandoff);
 
-                // Notify Control Group
-                try {
-                    const customerName = conversation ? (conversation.customerName || phoneNumber || remoteJid.split('@')[0]) : (phoneNumber || remoteJid.split('@')[0]);
-                    const customerPhone = phoneNumber || (conversation ? conversation.phoneNumber : null) || remoteJid.split('@')[0];
-                    const transferTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo', hour12: true, dateStyle: 'short', timeStyle: 'short' });
-                    
-                    let custNumber = 'غير مسجل';
-                    if (conversation && conversation.CustomerId) {
-                        const c = await Customer.findByPk(conversation.CustomerId);
-                        if (c) custNumber = c.customerNumber || c.id;
-                    }
-                    const notifyMsg = `🚨 *طلب تدخل فريق المبيعات*\n\n🔢 كود العميل: ${custNumber}\n👤 العميل: ${customerName}\n📞 الرقم: ${customerPhone}\n👨‍💼 الموظف المسؤول: ${assignedSalesName}\n⏰ وقت التحويل: ${transferTime}`;
-                    
-                    let targetJid = user.control_group_jid || null;
-                    if (!targetJid) {
-                        const groups = await getCachedParticipatingGroups(sock, userId);
-                        for (const groupId in groups) {
-                            const group = groups[groupId];
-                            const subjectLower = group.subject ? group.subject.toLowerCase() : '';
-                            if (subjectLower === 'gac crm') {
-                                targetJid = groupId;
-                                break;
-                            }
+            // Notify Control Group
+            try {
+                const customerName = conversation ? (conversation.customerName || phoneNumber || remoteJid.split('@')[0]) : (phoneNumber || remoteJid.split('@')[0]);
+                const customerPhone = phoneNumber || (conversation ? conversation.phoneNumber : null) || remoteJid.split('@')[0];
+                const transferTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo', hour12: true, dateStyle: 'short', timeStyle: 'short' });
+                
+                let custNumber = 'غير مسجل';
+                if (conversation && conversation.CustomerId) {
+                    const c = await Customer.findByPk(conversation.CustomerId);
+                    if (c) custNumber = c.customerNumber || c.id;
+                }
+                const notifyMsg = `🚨 *طلب تدخل فريق المبيعات*\n\n🔢 كود العميل: ${custNumber}\n👤 العميل: ${customerName}\n📞 الرقم: ${customerPhone}\n👨‍💼 الموظف المسؤول: ${assignedSalesName}\n⏰ وقت التحويل: ${transferTime}`;
+                
+                let targetJid = user.control_group_jid || null;
+                if (!targetJid) {
+                    const groups = await getCachedParticipatingGroups(sock, userId);
+                    for (const groupId in groups) {
+                        const group = groups[groupId];
+                        const subjectLower = group.subject ? group.subject.toLowerCase() : '';
+                        if (subjectLower === 'gac crm') {
+                            targetJid = groupId;
+                            break;
                         }
                     }
-                    if (targetJid) {
-                        await sendHumanMessage(sock, targetJid, { text: notifyMsg }, { userId });
-                        console.log(`[Menu-Only] ✅ Handoff notification sent to group ${targetJid}`);
-                    }
-                } catch (e) {
-                    console.error('[Menu-Only] ❌ Failed to notify control group:', e);
                 }
-                return;
+                if (targetJid) {
+                    await sendHumanMessage(sock, targetJid, { text: notifyMsg }, { userId });
+                    console.log(`[Handoff] ✅ Handoff notification sent to group ${targetJid}`);
+                }
+            } catch (e) {
+                console.error('[Handoff] ❌ Failed to notify control group:', e);
             }
-            
+            return;
+        }
+
+        // ======================================================
+        // 🔒 Menu-Only Mode — وضع القوائم فقط
+        // ======================================================
+        // حظر الرسائل الحرة وإرسال رسالة التوجيه يتم فقط وفقط إذا كانت الزراير مفعلة والقوائم تعمل.
+        // إذا كانت الزراير موقوفة (buttonsStopped = true)، يتم تخطي هذا البلوك تماماً،
+        // ولا يتم إرسال رسالة "معلش مفهمتش قصدك بالظبط" ولا يتم حظر النص الحر إطلاقاً،
+        // بل تنتقل المعالجة مباشرة إلى خطوة (5) للذكاء الاصطناعي (Vertex AI) للرد على العميل بشكل طبيعي.
+        if (user.bot_mode === 'menu_only' && !buttonsStopped && text && !remoteJid.endsWith('@g.us')) {
             // Free text that is not a number and not a trigger word → show guidance + re-send menu
             console.log(`[Menu-Only] 🔒 Free text blocked for ${remoteJid}: "${text}"`);
             
@@ -2647,7 +2706,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             }
 
             // === Send Buttons for New Customer in Hybrid Mode ===
-            if (isNewCustomer && user.bot_mode !== 'ai_only' && !user.buttons_disabled) {
+            if (isNewCustomer && user.bot_mode !== 'ai_only' && !buttonsStopped) {
                 await new Promise(resolve => setTimeout(resolve, 3500));
                 await sendInteractiveButtons(sock, remoteJid, userId, io, null, conversation?.customerName);
             }

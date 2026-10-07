@@ -16,6 +16,7 @@ import Instruction from '../models/Instruction.js';
 import Product from '../models/Product.js';
 import InteractiveButton from '../models/InteractiveButton.js';
 import InteractiveMenu from '../models/InteractiveMenu.js';
+import SystemSettings from '../models/SystemSettings.js';
 import { upload, compressAndSaveImage, deleteImage } from '../config/uploadConfig.js';
 import { Op, Sequelize } from 'sequelize';
 import { ensureAuthenticated, isAdmin, isSuperAdmin, isSales, canAccessSettings } from '../middleware/permissions.js';
@@ -1551,9 +1552,21 @@ router.get('/buttons', async (req, res) => {
     try {
         const userId = req.user.id;
         
-        // Fetch all menus with their buttons
+        // Fetch all menus with their buttons (Admins/Super_Admins see menus across admin users)
+        let menuWhere = { UserId: userId };
+        let productWhere = { UserId: userId, isActive: true };
+        if (req.user.role === 'super_admin' || req.user.role === 'admin') {
+            const adminUsers = await User.findAll({
+                where: { role: ['admin', 'super_admin'] },
+                attributes: ['id']
+            });
+            const adminIds = adminUsers.map(u => u.id);
+            menuWhere = { UserId: adminIds };
+            productWhere = { UserId: adminIds, isActive: true };
+        }
+
         const menus = await InteractiveMenu.findAll({
-            where: { UserId: userId },
+            where: menuWhere,
             include: [{
                 model: InteractiveButton,
                 order: [['order', 'ASC'], ['createdAt', 'ASC']]
@@ -1561,9 +1574,26 @@ router.get('/buttons', async (req, res) => {
             order: [['createdAt', 'ASC']]
         });
         
-        const products = await Product.findAll({ where: { UserId: userId, isActive: true }, order: [['createdAt', 'DESC']] });
-        const handoffCount = await Conversation.count({ where: { UserId: userId, is_handoff: true } });
+        const products = await Product.findAll({ where: productWhere, order: [['createdAt', 'DESC']] });
+        const handoffCount = await Conversation.count({ where: { is_handoff: true } });
         const currentUser = await User.findByPk(userId);
+
+        // Check if buttons are disabled (for current user, or any admin, or system setting)
+        let buttonsDisabled = currentUser.buttons_disabled || false;
+        try {
+            const sysSetting = await SystemSettings.findOne({
+                where: { settingKey: 'buttons_disabled' }
+            });
+            if (sysSetting) {
+                buttonsDisabled = sysSetting.settingValue === 'true' || sysSetting.settingValue === '1';
+            } else {
+                const anyAdminDisabled = await User.findOne({
+                    where: { role: ['admin', 'super_admin'], buttons_disabled: true }
+                });
+                if (anyAdminDisabled) buttonsDisabled = true;
+            }
+        } catch (e) {}
+
         res.render('interactive_buttons', { 
             user: req.user, 
             page: 'buttons', 
@@ -1571,7 +1601,7 @@ router.get('/buttons', async (req, res) => {
             products, 
             handoffCount, 
             botMode: currentUser.bot_mode || 'menu_only',
-            buttonsDisabled: currentUser.buttons_disabled || false
+            buttonsDisabled
         });
     } catch (err) {
         console.error('Buttons page error:', err);
@@ -1582,17 +1612,41 @@ router.get('/buttons', async (req, res) => {
 // Set Bot Mode
 router.post('/set-bot-mode', async (req, res) => {
     try {
-        const user = await User.findByPk(req.user.id);
-        if (!user) return res.status(404).json({ success: false });
-        
         const validModes = ['ai_only', 'hybrid', 'menu_only'];
         const newMode = req.body.mode;
         
         if (validModes.includes(newMode)) {
-            user.bot_mode = newMode;
-            await user.save();
-            console.log(`[Bot-Mode] User ${user.id} changed mode to: ${user.bot_mode}`);
-            res.json({ success: true, mode: user.bot_mode });
+            // Update current user
+            const user = await User.findByPk(req.user.id);
+            if (user) {
+                user.bot_mode = newMode;
+                await user.save();
+            }
+
+            // Update all admin / super_admin users
+            await User.update(
+                { bot_mode: newMode },
+                { where: { role: ['admin', 'super_admin'] } }
+            );
+
+            // Save to SystemSettings for all admins
+            const adminUsers = await User.findAll({
+                where: { role: ['admin', 'super_admin'] },
+                attributes: ['id']
+            });
+            for (const adm of adminUsers) {
+                await SystemSettings.upsert({
+                    settingKey: 'bot_mode',
+                    settingValue: newMode,
+                    settingType: 'text',
+                    category: 'general',
+                    label: 'وضع تشغيل البوت',
+                    UserId: adm.id
+                });
+            }
+
+            console.log(`[Bot-Mode] User ${req.user.id} changed mode to: ${newMode} globally for all admins`);
+            res.json({ success: true, mode: newMode });
         } else {
             res.status(400).json({ success: false, error: 'Invalid mode' });
         }
@@ -1605,14 +1659,39 @@ router.post('/set-bot-mode', async (req, res) => {
 // Toggle Disable All Buttons
 router.post('/buttons/toggle-disable-all', async (req, res) => {
     try {
+        const isDisabled = req.body.disabled === true || req.body.disabled === 'true';
+        
+        // 1. Update current user
         const user = await User.findByPk(req.user.id);
-        if (!user) return res.status(404).json({ success: false });
+        if (user) {
+            user.buttons_disabled = isDisabled;
+            await user.save();
+        }
+
+        // 2. Update all admin / super_admin users so all active bot sessions are synced!
+        await User.update(
+            { buttons_disabled: isDisabled },
+            { where: { role: ['admin', 'super_admin'] } }
+        );
+
+        // 3. Save to SystemSettings for all admins
+        const adminUsers = await User.findAll({
+            where: { role: ['admin', 'super_admin'] },
+            attributes: ['id']
+        });
+        for (const adm of adminUsers) {
+            await SystemSettings.upsert({
+                settingKey: 'buttons_disabled',
+                settingValue: isDisabled ? 'true' : 'false',
+                settingType: 'boolean',
+                category: 'buttons',
+                label: 'تعطيل ردود الأزرار بالكامل',
+                UserId: adm.id
+            });
+        }
         
-        user.buttons_disabled = req.body.disabled === true || req.body.disabled === 'true';
-        await user.save();
-        
-        console.log(`[Buttons-Disabled] User ${user.id} set buttons_disabled to: ${user.buttons_disabled}`);
-        res.json({ success: true, buttons_disabled: user.buttons_disabled });
+        console.log(`[Buttons-Disabled] User ${req.user.id} set buttons_disabled to: ${isDisabled} globally for all admins`);
+        res.json({ success: true, buttons_disabled: isDisabled });
     } catch (err) {
         console.error('Toggle disable all buttons error:', err);
         res.status(500).json({ success: false });
@@ -1647,7 +1726,8 @@ router.post('/menus/edit', async (req, res) => {
         const userId = req.user.id;
         const { id, menuName, triggerWords, welcomeMessage } = req.body;
         
-        const menu = await InteractiveMenu.findOne({ where: { id, UserId: userId } });
+        const menuWhere = (req.user.role === 'admin' || req.user.role === 'super_admin') ? { id } : { id, UserId: userId };
+        const menu = await InteractiveMenu.findOne({ where: menuWhere });
         if(menu) {
             menu.menuName = menuName;
             menu.triggerWords = triggerWords;
@@ -1665,7 +1745,8 @@ router.post('/menus/delete', async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.body;
-        await InteractiveMenu.destroy({ where: { id, UserId: userId } });
+        const menuWhere = (req.user.role === 'admin' || req.user.role === 'super_admin') ? { id } : { id, UserId: userId };
+        await InteractiveMenu.destroy({ where: menuWhere });
         res.redirect('/dashboard/buttons');
     } catch(err) {
         console.error(err);
@@ -1678,11 +1759,14 @@ router.post('/menus/set-default', async (req, res) => {
         const userId = req.user.id;
         const { id } = req.body;
         
+        let targetMenu = await InteractiveMenu.findByPk(id);
+        let targetUserId = targetMenu ? targetMenu.UserId : userId;
+
         // Remove default from all other menus
-        await InteractiveMenu.update({ isDefault: false }, { where: { UserId: userId } });
+        await InteractiveMenu.update({ isDefault: false }, { where: { UserId: targetUserId } });
         
         // Set this menu as default
-        await InteractiveMenu.update({ isDefault: true }, { where: { id, UserId: userId } });
+        await InteractiveMenu.update({ isDefault: true }, { where: { id } });
         
         res.redirect('/dashboard/buttons');
     } catch(err) {
@@ -1754,7 +1838,8 @@ router.post('/buttons/edit', upload.any(), async (req, res) => {
             return res.redirect('/dashboard/buttons');
         }
 
-        const button = await InteractiveButton.findOne({ where: { id, UserId: userId } });
+        const btnWhere = (req.user.role === 'admin' || req.user.role === 'super_admin') ? { id } : { id, UserId: userId };
+        const button = await InteractiveButton.findOne({ where: btnWhere });
         if (!button) return res.redirect('/dashboard/buttons');
 
         button.label = label.substring(0, 20);
@@ -1799,7 +1884,8 @@ router.post('/buttons/delete', async (req, res) => {
 
         if (!id) return res.redirect('/dashboard/buttons');
 
-        await InteractiveButton.destroy({ where: { id, UserId: userId } });
+        const btnWhere = (req.user.role === 'admin' || req.user.role === 'super_admin') ? { id } : { id, UserId: userId };
+        await InteractiveButton.destroy({ where: btnWhere });
         res.redirect('/dashboard/buttons');
     } catch (err) {
         console.error('Delete button error:', err);
