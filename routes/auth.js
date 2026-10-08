@@ -20,15 +20,10 @@ router.post('/login', (req, res, next) => {
         req.logIn(user, (err) => {
             if (err) return next(err);
 
-            // Handle Remember Me
-            console.log("Remember Me Checkbox:", req.body.remember_me);
-            if (req.body.remember_me) {
-                req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
-                console.log("Session set to persist for 30 days.");
-            } else {
-                req.session.cookie.expires = false;
-                console.log("Session set to expire on browser close.");
-            }
+            // ضبط مدة الجلسة لتبقى 100 يوم في قاعدة البيانات
+            const HUNDRED_DAYS_MS = 100 * 24 * 60 * 60 * 1000;
+            req.session.cookie.maxAge = HUNDRED_DAYS_MS;
+            console.log(`[Auth] User ${user.username} logged in. Session set to persist for 100 days.`);
             if (user.role === 'super_admin') {
                 res.redirect('/admin');
             } else if (user.role === 'sales') {

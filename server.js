@@ -1,5 +1,6 @@
 import express from 'express';
 import session from 'express-session';
+import ConnectSessionSequelize from 'connect-session-sequelize';
 import { restoreSessions, checkSubscriptionExpiry, checkPauseTimer, checkInactivitySummary, checkNoActionCustomers, generateDailyKPI } from './controllers/botController.js';
 import { checkScheduledFollowUps, checkPendingFollowUps } from './services/followUpService.js';
 import cron from 'node-cron';
@@ -118,11 +119,33 @@ app.use(limiter);
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
+// Session Store (حفظ جلسات تسجيل الدخول في قاعدة البيانات MySQL لمدة 100 يوم حتى لا يسجل خروج عند أي ريستارت)
+const SequelizeStore = ConnectSessionSequelize(session.Store);
+const sessionStore = new SequelizeStore({
+    db: sequelize,
+    tableName: 'Sessions',
+    checkExpirationInterval: 60 * 60 * 1000, // تنظيف الجلسات المنتهية كل 60 دقيقة
+    expiration: 100 * 24 * 60 * 60 * 1000 // مدة صلاحية الجلسة: 100 يوم
+});
+
+// مزامنة جدول الجلسات في قاعدة البيانات
+sessionStore.sync();
+
+const HUNDRED_DAYS_MS = 100 * 24 * 60 * 60 * 1000;
+
 // Session
 app.use(session({
     secret: process.env.SESSION_SECRET || 'secret',
+    store: sessionStore,
     resave: false,
-    saveUninitialized: false
+    saveUninitialized: false,
+    rolling: true, // تجديد مدة الـ 100 يوم مع كل استخدام للموقع
+    cookie: {
+        maxAge: HUNDRED_DAYS_MS, // 100 يوم
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: false
+    }
 }));
 
 // Passport
