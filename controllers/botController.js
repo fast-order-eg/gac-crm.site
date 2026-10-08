@@ -966,11 +966,17 @@ async function sendInteractiveButtons(sock, remoteJid, userId, io, menuId = null
         menuText += `\n👉 للاختيار، أرسل رقم الخدمة (مثلاً: 1)`;
 
         // Send CLEAN text to WhatsApp (User won't see the code)
-        await sendHumanMessage(sock, remoteJid, { text: menuText }, { userId });
+        const sentMenuMsg = await sendHumanMessage(sock, remoteJid, { text: menuText }, { userId });
 
         // Save TAGGED text to DB (So parser can find it)
         const dbMenuText = menuText + `\n\n[M:${menu.id}]`;
-        const savedMsg = await Message.create({ UserId: userId, remoteJid, role: 'model', content: dbMenuText });
+        const savedMsg = await Message.create({
+            UserId: userId,
+            remoteJid,
+            role: 'model',
+            content: dbMenuText,
+            messageId: sentMenuMsg?.key?.id || null
+        });
         if (io) io.to(`user_${userId}`).emit('new_message', savedMsg);
 
         console.log(`🔘 [Text Menu] Sent menu ${menu.id} to ${remoteJid}`);
@@ -1144,13 +1150,14 @@ async function handleButtonResponse(sock, remoteJid, buttonId, userId, io, extra
                         console.error('Error getting success message setting:', e);
                     }
                     
-                    await sendHumanMessage(sock, remoteJid, { text: successMsg }, { userId });
+                    const sentRespSuccess = await sendHumanMessage(sock, remoteJid, { text: successMsg }, { userId });
                     
                     const savedResp = await Message.create({
                         UserId: userId,
                         remoteJid,
                         role: 'model',
-                        content: successMsg
+                        content: successMsg,
+                        messageId: sentRespSuccess?.key?.id || null
                     });
                     io.to(`user_${userId}`).emit('new_message', savedResp);
 
@@ -1168,13 +1175,14 @@ async function handleButtonResponse(sock, remoteJid, buttonId, userId, io, extra
                         missingMsg = '⚠️ يرجى كتابة بريدك الإلكتروني المستخدم في التسجيل لإكمال الاشتراك.';
                     }
                     
-                    await sendHumanMessage(sock, remoteJid, { text: missingMsg }, { userId });
+                    const sentRespMissing = await sendHumanMessage(sock, remoteJid, { text: missingMsg }, { userId });
                     
                     const savedResp = await Message.create({
                         UserId: userId,
                         remoteJid,
                         role: 'model',
-                        content: missingMsg
+                        content: missingMsg,
+                        messageId: sentRespMissing?.key?.id || null
                     });
                     io.to(`user_${userId}`).emit('new_message', savedResp);
                     
@@ -1212,14 +1220,15 @@ async function handleButtonResponse(sock, remoteJid, buttonId, userId, io, extra
             }
 
             // Send text after all images
-            await sendHumanMessage(sock, remoteJid, { text: responseTextToSend }, { userId });
+            const sentBtnResp = await sendHumanMessage(sock, remoteJid, { text: responseTextToSend }, { userId });
 
             // Save bot response
             const savedResp = await Message.create({
                 UserId: userId,
                 remoteJid,
                 role: 'model',
-                content: responseTextToSend
+                content: responseTextToSend,
+                messageId: sentBtnResp?.key?.id || null
             });
             io.to(`user_${userId}`).emit('new_message', savedResp);
         }
@@ -1265,10 +1274,16 @@ export async function handleFunnelStep(sock, remoteJid, customer, userText, msg,
     // Helper to send message and save to DB
     const sendAndSave = async (textToSend, menuTag = null) => {
         // Send clean text to WhatsApp
-        await sendHumanMessage(sock, remoteJid, { text: textToSend }, { userId });
+        const sentMsg = await sendHumanMessage(sock, remoteJid, { text: textToSend }, { userId });
         // Save to DB (tagged if menu)
         const contentToSave = menuTag ? `${textToSend}\n\n[M:${menuTag}]` : textToSend;
-        const savedMsg = await Message.create({ UserId: userId, remoteJid, role: 'model', content: contentToSave });
+        const savedMsg = await Message.create({
+            UserId: userId,
+            remoteJid,
+            role: 'model',
+            content: contentToSave,
+            messageId: sentMsg?.key?.id || null
+        });
         if (io) io.to(`user_${userId}`).emit('new_message', savedMsg);
     };
 
@@ -1390,14 +1405,15 @@ export async function handleFunnelStep(sock, remoteJid, customer, userText, msg,
             const guaranteesMsg = await getSetting('guarantees_message');
             const imagePath = path.join(process.cwd(), 'public/uploads/guarantees_placeholder.jpg');
             if (fs.existsSync(imagePath)) {
-                await sendHumanMessage(sock, remoteJid, { image: { url: imagePath }, caption: guaranteesMsg }, { userId });
+                const sentImg = await sendHumanMessage(sock, remoteJid, { image: { url: imagePath }, caption: guaranteesMsg }, { userId });
                 
                 // Save to DB
                 const savedMsg = await Message.create({
                     UserId: userId,
                     remoteJid,
                     role: 'model',
-                    content: `[صورة الضمانات]\n\n${guaranteesMsg}`
+                    content: `[صورة الضمانات]\n\n${guaranteesMsg}`,
+                    messageId: sentImg?.key?.id || null
                 });
                 if (io) io.to(`user_${userId}`).emit('new_message', savedMsg);
             } else {
@@ -1760,6 +1776,36 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             );
         } catch (e) {
             console.error('[PhoneShare] Error:', e);
+        }
+    });
+
+    // الاستماع لأحداث تفاعل الإيموجي المباشرة من واتساب (messages.reaction)
+    sock.ev.on('messages.reaction', async (reactions) => {
+        try {
+            for (const r of reactions) {
+                if (!r || !r.reaction) continue;
+                const targetKeyId = r.reaction.key?.id || r.key?.id;
+                const emojiText = r.reaction.text || null;
+                if (!targetKeyId) continue;
+                console.log(`❤️ [messages.reaction] استلام تفاعل "${emojiText || 'إلغاء'}" للرسالة ${targetKeyId}`);
+                const targetDbMsg = await Message.findOne({ where: { messageId: targetKeyId } });
+                if (targetDbMsg) {
+                    targetDbMsg.reaction = emojiText;
+                    await targetDbMsg.save();
+                    if (io) {
+                        const reactionPayload = {
+                            dbId: targetDbMsg.id,
+                            messageId: targetKeyId,
+                            remoteJid: targetDbMsg.remoteJid,
+                            reaction: emojiText
+                        };
+                        io.to(`user_${userId}`).emit('message_reaction', reactionPayload);
+                        io.to('crm_staff').emit('message_reaction', reactionPayload);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('[messages.reaction] Error:', e);
         }
     });
 
@@ -2376,14 +2422,15 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     const replyText = await callAbkarinoAPI(text, userId);
 
                     // Send Reply through Queue
-                    await sendHumanMessage(sock, remoteJid, { text: replyText }, { userId });
+                    const sentAbkarino = await sendHumanMessage(sock, remoteJid, { text: replyText }, { userId });
 
                     // Save Bot Reply
                     const savedResponse = await Message.create({
                         UserId: userId,
                         remoteJid,
                         role: 'model',
-                        content: replyText
+                        content: replyText,
+                        messageId: sentAbkarino?.key?.id || null
                     });
                     io.to(`user_${userId}`).emit('new_message', savedResponse);
                     return; // Stop processing further
@@ -2614,8 +2661,14 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             }
 
             const handoffMsg = `جاري تحويلك إلى ${assignedSalesName}. يرجى الانتظار 🙏`;
-            await sendHumanMessage(sock, remoteJid, { text: handoffMsg }, { userId });
-            const svHandoff = await Message.create({ UserId: userId, remoteJid, role: 'model', content: handoffMsg });
+            const sentHandoff = await sendHumanMessage(sock, remoteJid, { text: handoffMsg }, { userId });
+            const svHandoff = await Message.create({
+                UserId: userId,
+                remoteJid,
+                role: 'model',
+                content: handoffMsg,
+                messageId: sentHandoff?.key?.id || null
+            });
             io.to(`user_${userId}`).emit('new_message', svHandoff);
 
             // Notify Control Group
@@ -2669,8 +2722,14 @@ export const startSession = async (userId, io, phoneNumber = null) => {
 
             if (!isGreeting) {
                 const guidanceMsg = 'معلش مفهمتش قصدك بالظبط 😅\n\n👉 ياريت تختار رقم من القايمة اللي تحت، أو لو حابب تتكلم مع المبيعات اكتب كلمة "مبيعات" بس.';
-                await sendHumanMessage(sock, remoteJid, { text: guidanceMsg }, { userId });
-                const svGuidance = await Message.create({ UserId: userId, remoteJid, role: 'model', content: guidanceMsg });
+                const sentGuidance = await sendHumanMessage(sock, remoteJid, { text: guidanceMsg }, { userId });
+                const svGuidance = await Message.create({
+                    UserId: userId,
+                    remoteJid,
+                    role: 'model',
+                    content: guidanceMsg,
+                    messageId: sentGuidance?.key?.id || null
+                });
                 if (io) io.to(`user_${userId}`).emit('new_message', svGuidance);
             }
             
@@ -2780,8 +2839,14 @@ export const startSession = async (userId, io, phoneNumber = null) => {
 
                 // 2. Send message to customer
                 const handoffMsg = `عفواً، سأقوم بتحويلك إلى ${assignedSalesName}. يرجى الانتظار.`;
-                await sendHumanMessage(sock, remoteJid, { text: handoffMsg }, { userId });
-                const sv = await Message.create({ UserId: userId, remoteJid, role: 'model', content: handoffMsg });
+                const sentAiHandoff = await sendHumanMessage(sock, remoteJid, { text: handoffMsg }, { userId });
+                const sv = await Message.create({
+                    UserId: userId,
+                    remoteJid,
+                    role: 'model',
+                    content: handoffMsg,
+                    messageId: sentAiHandoff?.key?.id || null
+                });
                 io.to('user_' + userId).emit('new_message', sv);
 
                 // 3. Notify Control Group (GAC CRM)
@@ -2850,13 +2915,14 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             });
 
             replyText = extractCleanAiText(replyText);
-            await sendHumanMessage(sock, remoteJid, { text: replyText }, { userId });
+            const sentVertexReply = await sendHumanMessage(sock, remoteJid, { text: replyText }, { userId });
 
             const savedResponse = await Message.create({
                 UserId: userId,
                 remoteJid,
                 role: 'model',
-                content: replyText
+                content: replyText,
+                messageId: sentVertexReply?.key?.id || null
             });
             io.to(`user_${userId}`).emit('new_message', savedResponse);
 
@@ -4152,8 +4218,17 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
     } catch (e) {}
 
     let relativeUrl = filePath;
-    if (filePath.includes('public')) {
-        relativeUrl = filePath.substring(filePath.indexOf('public') + 6).replace(/\\/g, '/');
+    const publicDir = path.join(process.cwd(), 'public');
+    if (filePath.startsWith(publicDir)) {
+        relativeUrl = filePath.slice(publicDir.length).replace(/\\/g, '/');
+    } else if (filePath.includes('/uploads/') || filePath.includes('\\uploads\\')) {
+        const idx = filePath.search(/[\\/]uploads[\\/]/);
+        relativeUrl = filePath.substring(idx).replace(/\\/g, '/');
+    } else {
+        const lastPublic = filePath.lastIndexOf('public');
+        if (lastPublic !== -1) {
+            relativeUrl = filePath.substring(lastPublic + 6).replace(/\\/g, '/');
+        }
     }
     if (!relativeUrl.startsWith('/')) relativeUrl = '/' + relativeUrl;
 
@@ -4193,46 +4268,80 @@ export async function sendReaction(userId, remoteJid, messageIdentifier, emoji) 
         targetMsg = await Message.findOne({ where: { messageId: String(messageIdentifier) } });
     }
 
-    if (!targetMsg || !targetMsg.messageId) {
-        throw new Error("لم يتم العثور على الرسالة المراد التفاعل معها أو ليس لها معرّف واتساب.");
+    if (!targetMsg) {
+        throw new Error("لم يتم العثور على الرسالة المراد التفاعل معها.");
     }
 
     const reactionText = emoji || "";
-    const reactionMessage = {
-        react: {
-            text: reactionText,
-            key: {
-                remoteJid: targetMsg.remoteJid || remoteJid,
-                fromMe: targetMsg.role === 'model',
-                id: targetMsg.messageId
-            }
-        }
-    };
+    let waSent = false;
+    let waError = null;
 
-    try {
-        await sock.sendMessage(remoteJid, reactionMessage);
-    } catch (primaryErr) {
-        if (remoteJid && remoteJid.endsWith('@lid')) {
-            const phone = lidPhoneMap.get(remoteJid) || (await Customer.findOne({ where: { remoteJid } }))?.phoneNumber;
-            if (phone) {
-                const phoneJid = `${phone}@s.whatsapp.net`;
-                await sock.sendMessage(phoneJid, reactionMessage);
-            } else {
-                throw primaryErr;
+    if (targetMsg.messageId) {
+        const reactionMessage = {
+            react: {
+                text: reactionText,
+                key: {
+                    remoteJid: targetMsg.remoteJid || remoteJid,
+                    fromMe: targetMsg.role === 'model',
+                    id: targetMsg.messageId
+                }
             }
-        } else {
-            throw primaryErr;
+        };
+
+        try {
+            await sock.sendMessage(remoteJid, reactionMessage);
+            waSent = true;
+        } catch (primaryErr) {
+            console.warn(`⚠️ فشل التفاعل المبدئي على ${remoteJid}:`, primaryErr.message);
+            if (remoteJid && remoteJid.endsWith('@lid')) {
+                const phone = lidPhoneMap.get(remoteJid) || (await Customer.findOne({ where: { remoteJid } }))?.phoneNumber;
+                if (phone) {
+                    const phoneJid = `${phone}@s.whatsapp.net`;
+                    try {
+                        const fallbackMsg = {
+                            react: {
+                                text: reactionText,
+                                key: {
+                                    remoteJid: phoneJid,
+                                    fromMe: targetMsg.role === 'model',
+                                    id: targetMsg.messageId
+                                }
+                            }
+                        };
+                        await sock.sendMessage(phoneJid, fallbackMsg);
+                        waSent = true;
+                    } catch (secErr) {
+                        waError = secErr.message;
+                    }
+                } else {
+                    waError = primaryErr.message;
+                }
+            } else if (targetMsg.remoteJid && targetMsg.remoteJid !== remoteJid) {
+                try {
+                    await sock.sendMessage(targetMsg.remoteJid, reactionMessage);
+                    waSent = true;
+                } catch (thirdErr) {
+                    waError = thirdErr.message;
+                }
+            } else {
+                waError = primaryErr.message;
+            }
         }
+    } else {
+        console.warn(`⚠️ الرسالة ${targetMsg.id} لا تملك معرّف واتساب messageId (رسالة قديمة)، سيتم حفظ التفاعل في قاعدة البيانات فقط.`);
     }
 
+    // حفظ التفاعل دائماً في قاعدة البيانات لضمان بقائه في اللايف شات وعدم اختفائه
     targetMsg.reaction = reactionText || null;
     await targetMsg.save();
 
     return {
         dbId: targetMsg.id,
         messageId: targetMsg.messageId,
-        remoteJid: targetMsg.remoteJid,
-        reaction: targetMsg.reaction
+        remoteJid: targetMsg.remoteJid || remoteJid,
+        reaction: targetMsg.reaction,
+        waSent,
+        waError
     };
 }
 

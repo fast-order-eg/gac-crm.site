@@ -233,9 +233,42 @@
         }
         .media-bubble { max-width: 250px; border-radius: 8px; overflow: hidden; margin-bottom: 5px; }
         .media-bubble img { max-width: 240px; max-height: 240px; object-fit: cover; border-radius: 8px; cursor: pointer; display: block; transition: transform 0.2s ease; }
-        .media-bubble img:hover { transform: scale(1.02); }
+        .media-bubble img:hover { transform: scale(1.02); filter: brightness(1.05); }
         .media-bubble video { max-width: 250px; max-height: 250px; border-radius: 8px; display: block; }
         .media-bubble audio { max-width: 100%; min-width: 220px; height: 38px; border-radius: 20px; display: block; direction: ltr; }
+
+        /* ── WhatsApp-Style Image Preview Lightbox ── */
+        .img-viewer-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.88);
+            z-index: 999999;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            padding: 20px;
+            backdrop-filter: blur(5px);
+        }
+        .img-viewer-content {
+            max-width: 90vw;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .img-viewer-content img {
+            max-width: 100%;
+            max-height: 78vh;
+            border-radius: 12px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+            object-fit: contain;
+        }
+        .img-viewer-bar {
+            margin-top: 15px;
+            display: flex;
+            gap: 15px;
+        }
 
         /* ── Modern WhatsApp-Style Voice Player ── */
         .voice-player {
@@ -560,6 +593,17 @@
         <button type="button" class="reaction-emoji-btn" onclick="applyReaction('😮')" title="مندهش">😮</button>
         <button type="button" class="reaction-emoji-btn" onclick="applyReaction('😢')" title="حزين">😢</button>
         <button type="button" class="reaction-emoji-btn" onclick="applyReaction('🙏')" title="دعاء / شكراً">🙏</button>
+    </div>
+
+    <!-- Lightbox Modal for Full Image Preview -->
+    <div id="imageViewerModal" class="img-viewer-modal" style="display:none;" onclick="closeImageViewer(event)">
+        <div class="img-viewer-content" onclick="event.stopPropagation()">
+            <img id="imageViewerImg" src="" alt="صورة بالحجم الكامل">
+            <div class="img-viewer-bar">
+                <a id="imageViewerDownload" href="" download class="btn btn-sm btn-success fw-semibold"><i class="bi bi-download me-1"></i> تحميل الصورة 📥</a>
+                <button type="button" class="btn btn-sm btn-dark" onclick="closeImageViewer()"><i class="bi bi-x-lg me-1"></i> إغلاق</button>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -991,7 +1035,10 @@
 
         // 2. الوسائط
         if (mediaUrl) {
-            const cleanUrl = mediaUrl.trim();
+            let cleanUrl = mediaUrl.trim();
+            cleanUrl = cleanUrl.replace(/^\/?_html\/public/, '');
+            if (!cleanUrl.startsWith('/') && !cleanUrl.startsWith('http')) cleanUrl = '/' + cleanUrl;
+
             const ext = cleanUrl.split('?')[0].split('.').pop().toLowerCase();
             const isAudio = ['ogg', 'mp3', 'wav', 'm4a', 'opus', 'webm'].includes(ext) || (txt && (txt.includes('صوتية') || txt.includes('audio')));
             const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) || (txt && (txt.includes('صورة') || txt.includes('img')));
@@ -1014,7 +1061,7 @@
                     </div>
                 `;
             } else if (isImage) {
-                contentHtml += `<div class="media-bubble"><a href="${cleanUrl}" target="_blank" download title="انقر للفتح بالكامل أو التحميل"><img src="${cleanUrl}" alt="صورة" loading="lazy"></a></div>`;
+                contentHtml += `<div class="media-bubble"><img src="${cleanUrl}" alt="صورة" loading="lazy" onclick="openImageViewer('${cleanUrl}')" title="انقر لعرض الصورة بالحجم الكامل"></div>`;
             } else if (isVideo) {
                 contentHtml += `<div class="media-bubble"><video src="${cleanUrl}" controls></video></div>`;
             } else {
@@ -1171,7 +1218,7 @@
         }
 
         try {
-            await fetch('/dashboard/livechat/react', {
+            const res = await fetch('/dashboard/livechat/react', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1180,9 +1227,38 @@
                     emoji: emojiToSend
                 })
             });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                console.error('Error applying reaction:', data?.error);
+            }
         } catch (err) {
             console.error('Error applying reaction:', err);
         }
+    }
+
+    function openImageViewer(url) {
+        if (!url) return;
+        let clean = url.trim().replace(/^\/?_html\/public/, '');
+        if (!clean.startsWith('/') && !clean.startsWith('http')) clean = '/' + clean;
+
+        const modal = document.getElementById('imageViewerModal');
+        const img = document.getElementById('imageViewerImg');
+        const dl = document.getElementById('imageViewerDownload');
+        if (!modal || !img) return;
+
+        img.src = clean;
+        if (dl) {
+            dl.href = clean;
+            const filename = clean.split('?')[0].split('/').pop() || 'image.jpg';
+            dl.setAttribute('download', filename);
+        }
+        modal.style.display = 'flex';
+    }
+
+    function closeImageViewer(e) {
+        if (e && e.target && e.target.tagName === 'IMG') return;
+        const modal = document.getElementById('imageViewerModal');
+        if (modal) modal.style.display = 'none';
     }
 
     let selectedMediaFile = null;
@@ -1293,6 +1369,19 @@
                                 else pendingLocalMessages.set(mediaKey, c - 1);
                             }, 45000);
                         }
+                        const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+                        if (unassignedBbl && data.message.id) {
+                            unassignedBbl.dataset.mid = data.message.id;
+                            if (!unassignedBbl.querySelector('.bbl-action-group')) {
+                                const actDiv = document.createElement('div');
+                                actDiv.className = 'bbl-action-group';
+                                actDiv.innerHTML = `
+                                    <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${data.message.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                                    <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${data.message.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+                                `;
+                                unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
+                            }
+                        }
                     }
                 } else {
                     alert('فشل إرسال المرفق: ' + (data.error || 'خطأ في الخادم'));
@@ -1343,7 +1432,21 @@
                 })
             });
             const d = await r.json();
-            if (!d.success) {
+            if (d.success && d.message) {
+                const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+                if (unassignedBbl && d.message.id) {
+                    unassignedBbl.dataset.mid = d.message.id;
+                    if (!unassignedBbl.querySelector('.bbl-action-group')) {
+                        const actDiv = document.createElement('div');
+                        actDiv.className = 'bbl-action-group';
+                        actDiv.innerHTML = `
+                            <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${d.message.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                            <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${d.message.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+                        `;
+                        unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
+                    }
+                }
+            } else if (!d.success) {
                 alert('فشل إرسال الرسالة: ' + (d.error || 'خطأ'));
                 const c = pendingLocalMessages.get(txt) || 0;
                 if (c <= 1) pendingLocalMessages.delete(txt);
