@@ -962,13 +962,35 @@ router.get('/livechat/:remoteJid/messages', async (req, res) => {
     }
 });
 
+const recentManualSendCache = new Map();
+
 router.post('/livechat/send', async (req, res) => {
     try {
         const { remoteJid, text } = req.body;
         if (!remoteJid || !text) return res.status(400).json({ error: 'remoteJid and text required' });
         
+        // منع التكرار على السيرفر في حال إرسال نقرتين متتاليتين
+        const debounceKey = `${remoteJid}_${text.trim()}`;
+        const lastSent = recentManualSendCache.get(debounceKey);
+        if (lastSent && Date.now() - lastSent < 3000) {
+            console.log(`⚠️ [Anti-Duplicate] منع إرسال رسالة مكررة في غضون 3 ثوانٍ لنفس العميل: "${text}"`);
+            return res.json({ success: true, message: { content: text } });
+        }
+        recentManualSendCache.set(debounceKey, Date.now());
+        setTimeout(() => recentManualSendCache.delete(debounceKey), 10000);
+
         // جلب العميل للتأكد من وجوده ومعرفة المالك الفعلي للجلسة
-        const customer = await Customer.findOne({ where: { remoteJid } });
+        let customer = await Customer.findOne({ where: { remoteJid } });
+        if (!customer && remoteJid.includes('@')) {
+            const phone = remoteJid.split('@')[0];
+            customer = await Customer.findOne({ where: { phoneNumber: phone } });
+        }
+        if (!customer) {
+            const conv = await Conversation.findOne({ where: { remoteJid } });
+            if (conv && conv.CustomerId) {
+                customer = await Customer.findByPk(conv.CustomerId);
+            }
+        }
         if (!customer) {
             return res.status(404).json({ error: 'العميل غير موجود' });
         }
@@ -978,7 +1000,13 @@ router.post('/livechat/send', async (req, res) => {
         
         const io = req.app.get('socketio');
         if (io) {
-            io.to(`user_${customer.UserId}`).emit('new_message', savedMsg);
+            const payload = {
+                ...savedMsg.toJSON(),
+                phoneNumber: customer.phoneNumber || null,
+                customerName: customer.customerName || null
+            };
+            io.to(`user_${customer.UserId}`).emit('new_message', payload);
+            io.to('crm_staff').emit('new_message', payload);
         }
 
         // تسجيل رد الموظف وسرعة الاستجابة في نظام الـ KPI تلقائياً
@@ -1021,7 +1049,17 @@ router.post('/livechat/send-media', uploadLivechatMedia.single('mediaFile'), asy
         if (!remoteJid) return res.status(400).json({ error: 'remoteJid required' });
         if (!req.file) return res.status(400).json({ error: 'لم يتم إرفاق أي ملف' });
 
-        const customer = await Customer.findOne({ where: { remoteJid } });
+        let customer = await Customer.findOne({ where: { remoteJid } });
+        if (!customer && remoteJid.includes('@')) {
+            const phone = remoteJid.split('@')[0];
+            customer = await Customer.findOne({ where: { phoneNumber: phone } });
+        }
+        if (!customer) {
+            const conv = await Conversation.findOne({ where: { remoteJid } });
+            if (conv && conv.CustomerId) {
+                customer = await Customer.findByPk(conv.CustomerId);
+            }
+        }
         if (!customer) {
             return res.status(404).json({ error: 'العميل غير موجود' });
         }
@@ -1036,7 +1074,13 @@ router.post('/livechat/send-media', uploadLivechatMedia.single('mediaFile'), asy
 
         const io = req.app.get('socketio');
         if (io) {
-            io.to(`user_${customer.UserId}`).emit('new_message', savedMsg);
+            const payload = {
+                ...savedMsg.toJSON(),
+                phoneNumber: customer.phoneNumber || null,
+                customerName: customer.customerName || null
+            };
+            io.to(`user_${customer.UserId}`).emit('new_message', payload);
+            io.to('crm_staff').emit('new_message', payload);
         }
 
         try {

@@ -265,26 +265,132 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script>
-    let curJid = null, curHO = false;
+    let curJid = null, curHO = false, curPhone = null;
+    let isSendingMsg = false;
+    const pendingLocalMessages = new Map();
+
     const io_ = io();
-    io_.on('connect', () => io_.emit('join_room', 'user_<%= targetUserId %>'));
+    io_.on('connect', () => {
+        io_.emit('join_room', 'user_<%= targetUserId %>');
+        io_.emit('join_room', 'crm_staff');
+    });
+
+    function playMessageChime() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.35);
+        } catch (e) {}
+    }
 
     io_.on('new_message', msg => {
-        const el = document.querySelector(`.lc-item[data-jid="${msg.remoteJid}"]`);
         let content = msg.content ? msg.content.replace(/\[M:\d+\]/g, '').trim() : '';
-        if (el) {
-            el.querySelector('.lc-prev').textContent = content;
-            const tEl = el.querySelector('.lc-t');
-            if (tEl) tEl.textContent = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'});
-            if (el.parentElement) el.parentElement.prepend(el);
+        if (!content && msg.media_url) {
+            content = 'مرفق وسائط';
         }
-        if (msg.remoteJid === curJid) {
+
+        // 1. البحث عن المحادثة في القائمة الجانبية (بمعرف JID أو برقم الهاتف)
+        let el = document.querySelector(`.lc-item[data-jid="${msg.remoteJid}"]`);
+        if (!el && msg.phoneNumber) {
+            el = document.querySelector(`.lc-item[data-phone="${msg.phoneNumber}"]`);
+        }
+
+        const isLid = msg.remoteJid && msg.remoteJid.endsWith('@lid');
+        const phoneFromJid = (!isLid && msg.remoteJid && msg.remoteJid.endsWith('@s.whatsapp.net')) ? msg.remoteJid.split('@')[0] : '';
+        const phone = msg.phoneNumber || phoneFromJid || '';
+        const nm = msg.customerName || phone || (isLid ? 'عميل واتساب' : msg.remoteJid.split('@')[0]);
+        const ts = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'});
+
+        // 2. إذا كانت المحادثة جديدة وغير موجودة بالقائمة، ننشئها ديناميكياً ونضيفها في المقدمة فوراً
+        if (!el) {
+            const listContainer = document.querySelector('.lc-contacts-list');
+            if (listContainer) {
+                const emptyMsg = listContainer.querySelector('.text-center');
+                if (emptyMsg) emptyMsg.remove();
+
+                const safeNm = nm.replace(/"/g, '&quot;').replace(/'/g, '');
+                const initial = nm[0]?.toUpperCase() || '?';
+
+                el = document.createElement('div');
+                el.className = 'lc-item';
+                el.dataset.jid = msg.remoteJid;
+                el.dataset.handoff = msg.is_handoff ? 'true' : 'false';
+                el.dataset.name = nm;
+                el.dataset.phone = phone;
+                el.onclick = () => loadChat(msg.remoteJid, safeNm, msg.is_handoff || false, phone);
+
+                el.innerHTML = `
+                    <div class="lc-av ${msg.is_handoff ? 'handoff-av' : ''}">
+                        ${initial}
+                        ${msg.is_handoff ? '<div class="h-dot"></div>' : ''}
+                    </div>
+                    <div class="lc-info">
+                        <div class="lc-name">${nm}</div>
+                        ${phone ? `<div class="lc-phone"><span class="d-none d-md-inline">📞 </span>+${phone}</div>` : ''}
+                        <div class="lc-prev">${content}</div>
+                    </div>
+                    <div class="lc-meta">
+                        <div class="lc-t">${ts}</div>
+                        <span class="unread-pill">1</span>
+                    </div>
+                `;
+                listContainer.prepend(el);
+                if (msg.role === 'user') playMessageChime();
+            }
+        } else {
+            // المحادثة موجودة: تحديث المعاينة ونقلها لأول القائمة
+            const prevEl = el.querySelector('.lc-prev');
+            if (prevEl) prevEl.textContent = content;
+            const tEl = el.querySelector('.lc-t');
+            if (tEl) tEl.textContent = ts;
+            if (el.parentElement) el.parentElement.prepend(el);
+
+            // لو ليست المحادثة المفتوحة حالياً وكانت رسالة من العميل، نزود عداد الرسائل غير المقروءة
+            const isThisChatActive = (curJid && (curJid === msg.remoteJid || (curPhone && phone && curPhone === phone)));
+            if (!isThisChatActive && msg.role === 'user') {
+                let badge = el.querySelector('.unread-pill');
+                if (!badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'unread-pill';
+                    badge.textContent = '1';
+                    const metaEl = el.querySelector('.lc-meta');
+                    if (metaEl) metaEl.appendChild(badge);
+                } else {
+                    badge.textContent = (parseInt(badge.textContent) || 0) + 1;
+                }
+                playMessageChime();
+            }
+        }
+
+        // 3. إذا كانت هذه المحادثة هي المفتوحة حالياً أمام المستخدم
+        const isCurrentChatOpen = (curJid && (curJid === msg.remoteJid || (curPhone && phone && curPhone === phone)));
+        if (isCurrentChatOpen) {
+            // منع التكرار للرسائل الصادرة التي تم عرضها محلياً للتو من هذا التبويب
+            if (msg.role !== 'user') {
+                const pendingKey = msg.media_url ? msg.media_url.trim() : content;
+                if (pendingKey && pendingLocalMessages.has(pendingKey)) {
+                    pendingLocalMessages.delete(pendingKey);
+                    return; // تم عرضها مسبقاً محلياً، لا نكررها
+                }
+            }
             addBbl(content, msg.role === 'user', new Date(msg.createdAt), msg.media_url);
         }
     });
 
     io_.on('conversation_updated', conv => {
-        const el = document.querySelector(`.lc-item[data-jid="${conv.remoteJid}"]`);
+        let el = document.querySelector(`.lc-item[data-jid="${conv.remoteJid}"]`);
+        if (!el && conv.phoneNumber) {
+            el = document.querySelector(`.lc-item[data-phone="${conv.phoneNumber}"]`);
+        }
         if (el) {
             el.dataset.handoff = conv.is_handoff ? 'true' : 'false';
             const av = el.querySelector('.lc-av');
@@ -300,7 +406,8 @@
                 const dot = av.querySelector('.h-dot');
                 if (dot) dot.remove();
             }
-            if (conv.remoteJid === curJid) {
+            const isMatch = curJid && (curJid === conv.remoteJid || (curPhone && conv.phoneNumber && curPhone === conv.phoneNumber));
+            if (isMatch) {
                 curHO = conv.is_handoff;
                 updHO(curHO);
             }
@@ -356,7 +463,7 @@
     }
 
     async function loadChat(jid, nm, ho, phone) {
-        curJid = jid; curHO = ho;
+        curJid = jid; curHO = ho; curPhone = phone || '';
         const outer = document.querySelector('.lc-outer');
         if (outer) outer.classList.add('lc-show-chat');
         document.querySelectorAll('.lc-item').forEach(el => el.classList.toggle('active', el.dataset.jid === jid));
@@ -433,18 +540,51 @@
     }
 
     async function sendMsg() {
+        if (isSendingMsg) return;
         const inp = document.getElementById('lcIn');
         const txt = inp.value.trim();
         if (!txt || !curJid) return;
+
+        isSendingMsg = true;
+        const sendBtn = document.querySelector('.btn-ls');
+        const origBtnContent = sendBtn ? sendBtn.innerHTML : '';
+        if (sendBtn) {
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" style="width:14px; height:14px;"></span>';
+        }
+        inp.disabled = true;
+
+        // تسجيل النص محلياً لمنع تكراره عند وصول بث السوكيت
+        pendingLocalMessages.set(txt, Date.now());
+        setTimeout(() => pendingLocalMessages.delete(txt), 45000);
+
         inp.value = ''; inp.style.height = 'auto';
         addBbl(txt, false, new Date());
-        const r = await fetch('/dashboard/livechat/send', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({remoteJid: curJid, text: txt})
-        });
-        const d = await r.json();
-        if (!d.success) alert('فشل إرسال الرسالة: ' + (d.error || 'خطأ'));
+
+        try {
+            const r = await fetch('/dashboard/livechat/send', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({remoteJid: curJid, text: txt})
+            });
+            const d = await r.json();
+            if (!d.success) {
+                alert('فشل إرسال الرسالة: ' + (d.error || 'خطأ'));
+                pendingLocalMessages.delete(txt);
+            }
+        } catch (err) {
+            console.error('Send error:', err);
+            alert('حدث خطأ في الاتصال أثناء إرسال الرسالة');
+            pendingLocalMessages.delete(txt);
+        } finally {
+            isSendingMsg = false;
+            if (sendBtn) {
+                sendBtn.disabled = false;
+                sendBtn.innerHTML = origBtnContent || '<i class="bi bi-send-fill"></i>';
+            }
+            inp.disabled = false;
+            inp.focus();
+        }
     }
 
     // --- Outgoing Media Upload Logic ---
@@ -508,6 +648,8 @@
             if (data.success) {
                 cancelMediaPreview();
                 if (data.message) {
+                    const mediaKey = data.message.media_url ? data.message.media_url.trim() : (data.message.content || '');
+                    if (mediaKey) pendingLocalMessages.set(mediaKey, Date.now());
                     addBbl(data.message.content, false, new Date(data.message.createdAt), data.message.media_url);
                 }
             } else {

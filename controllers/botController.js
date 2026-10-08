@@ -1831,7 +1831,9 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 // 6. بث فوري لصفحة اللايف شات عبر Socket.IO
                 if (io) {
                     io.to(`user_${userId}`).emit('new_message', savedMsg);
+                    io.to('crm_staff').emit('new_message', savedMsg);
                     io.to(`user_${userId}`).emit('conversation_updated', conv);
+                    io.to('crm_staff').emit('conversation_updated', conv);
                 }
 
                 // 7. احتساب سرعة الاستجابة في نظام الـ KPI للموظف المسئول
@@ -1973,16 +1975,33 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         }
         // === End Text Menu Parser ===
 
-        // 1. Save User Message to DB (ALWAYS immediately so dashboard sees it live)
-        if (text) {
-            const savedMsg = await Message.create({
+        // 1. Save User Message to DB (ALWAYS immediately so dashboard sees it live, including audio/media)
+        const hasIncomingContent = (text && text.trim().length > 0) || incomingMediaUrl;
+        let savedMsg = null;
+        if (hasIncomingContent) {
+            let msgContent = text || '';
+            if (!msgContent && incomingMediaUrl) {
+                if (messageType === 'audioMessage') msgContent = 'رسالة صوتية 🎙️';
+                else if (messageType === 'imageMessage') msgContent = '📷 صورة';
+                else if (messageType === 'videoMessage') msgContent = '🎥 فيديو';
+                else msgContent = '📄 مستند';
+            }
+            savedMsg = await Message.create({
                 UserId: userId,
                 remoteJid,
                 role: 'user',
-                content: text,
+                content: msgContent,
                 media_url: incomingMediaUrl || null
             });
-            io.to(`user_${userId}`).emit('new_message', savedMsg);
+            if (io) {
+                const msgPayload = {
+                    ...savedMsg.toJSON(),
+                    phoneNumber: phoneNumber || null,
+                    customerName: msg.pushName || phoneNumber || null
+                };
+                io.to(`user_${userId}`).emit('new_message', msgPayload);
+                io.to('crm_staff').emit('new_message', msgPayload);
+            }
         }
 
         // === Early Debounce & Multi-Message Aggregation (لمنع الرد المتكرر إذا أرسل العميل عدة جمل متتالية) ===
@@ -2012,7 +2031,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         // === End Early Debounce ===
 
         // === 🔔 إرسال إشعار فوري (Web Push + Socket.IO) للموظف المسؤول عن العميل عند وصول رسالة جديدة ===
-        if (!remoteJid.endsWith('@g.us') && text) {
+        if (!remoteJid.endsWith('@g.us') && hasIncomingContent) {
             try {
                 const pushNameForNotif = msg.pushName || phoneNumber || (remoteJid.endsWith('@lid') ? 'عميل واتساب' : remoteJid.split('@')[0]);
                 const customerPhoneForNotif = phoneNumber || remoteJid.split('@')[0];
@@ -2028,19 +2047,51 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     }
                 });
 
-                const targetEmployeeId = custRecord.assignedToUserId || userId;
-                const previewText = text.length > 90 ? text.substring(0, 90) + '...' : text;
+                const notifText = (text && text.trim().length > 0) ? text : (incomingMediaUrl ? 'أرسل مرفق وسائط / فويس 📎' : 'رسالة جديدة');
+                const previewText = notifText.length > 90 ? notifText.substring(0, 90) + '...' : notifText;
                 const displayCustomerName = custRecord.customerName || pushNameForNotif || customerPhoneForNotif;
 
-                await notificationService.createNotification({
-                    type: 'new_message',
-                    title: `💬 رسالة جديدة من: ${displayCustomerName}`,
-                    message: `${previewText}`,
-                    targetUserId: targetEmployeeId,
-                    customerId: custRecord.id,
-                    ownerId: userId,
-                    io
-                });
+                // إذا كان العميل معيناً لموظف مبيعات محدد، نرسل الإشعار له وللأدمن
+                if (custRecord.assignedToUserId) {
+                    await notificationService.createNotification({
+                        type: 'new_message',
+                        title: `💬 رسالة جديدة من: ${displayCustomerName}`,
+                        message: `${previewText}`,
+                        targetUserId: custRecord.assignedToUserId,
+                        customerId: custRecord.id,
+                        ownerId: userId,
+                        io
+                    });
+                    if (custRecord.assignedToUserId !== userId) {
+                        await notificationService.createNotification({
+                            type: 'new_message',
+                            title: `💬 رسالة جديدة من: ${displayCustomerName}`,
+                            message: `${previewText}`,
+                            targetUserId: userId,
+                            customerId: custRecord.id,
+                            ownerId: userId,
+                            io
+                        });
+                    }
+                } else {
+                    // إذا لم يكن العميل معيناً لموظف بعينه، نرسل الإشعار لجميع موظفي المبيعات النشطين + الأدمن حتى يعلموا بوصول الرسالة فوراً!
+                    const activeSalesTeam = await User.findAll({
+                        where: { role: 'sales', is_active: true },
+                        attributes: ['id']
+                    });
+                    const targetUserIds = new Set([userId, ...activeSalesTeam.map(u => u.id)]);
+                    for (const tId of targetUserIds) {
+                        await notificationService.createNotification({
+                            type: 'new_message',
+                            title: `💬 رسالة جديدة من: ${displayCustomerName}`,
+                            message: `${previewText}`,
+                            targetUserId: tId,
+                            customerId: custRecord.id,
+                            ownerId: userId,
+                            io
+                        });
+                    }
+                }
             } catch (msgNotifErr) {
                 console.error('⚠️ [IncomingMsgNotification] Error notifying employee:', msgNotifErr.message);
             }
@@ -2313,8 +2364,9 @@ export const startSession = async (userId, io, phoneNumber = null) => {
             }
             // === End New Customer Buttons ===
 
+            const convLastText = (text && text.trim().length > 0) ? text : (incomingMediaUrl ? (messageType === 'audioMessage' ? 'رسالة صوتية 🎙️' : (messageType === 'imageMessage' ? '📷 صورة' : (messageType === 'videoMessage' ? '🎥 فيديو' : '📄 مستند'))) : 'رسالة جديدة');
             if (!created) {
-                conversation.lastMessageText = text;
+                conversation.lastMessageText = convLastText;
                 conversation.lastMessageAt = new Date();
                 conversation.unreadCount += 1; 
                 if (pushName && pushName !== remoteJid.split('@')[0]) {
@@ -2327,6 +2379,12 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     conversation.CustomerId = customer.id;
                 }
                 await conversation.save();
+            }
+
+            // بث تحديث المحادثة للسوكيت لتتحرك لأعلى القائمة وتحدث المعاينة فورياً
+            if (io) {
+                io.to(`user_${userId}`).emit('conversation_updated', conversation);
+                io.to('crm_staff').emit('conversation_updated', conversation);
             }
 
             // 3.7 Handle Handoff (Is Human taking over?)
