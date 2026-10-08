@@ -945,20 +945,54 @@ router.get('/livechat/:remoteJid/messages', async (req, res) => {
 
         const { remoteJid } = req.params;
         const decodedJid = decodeURIComponent(remoteJid);
+        const jids = [decodedJid];
+        if (decodedJid.endsWith('@lid')) {
+            const cust = await Customer.findOne({ where: { remoteJid: decodedJid } });
+            if (cust?.phoneNumber) {
+                jids.push(`${cust.phoneNumber}@s.whatsapp.net`);
+            }
+        } else if (decodedJid.endsWith('@s.whatsapp.net')) {
+            const phone = decodedJid.split('@')[0];
+            const cust = await Customer.findOne({ where: { phoneNumber: phone } });
+            if (cust?.remoteJid && cust.remoteJid.endsWith('@lid')) {
+                jids.push(cust.remoteJid);
+            }
+        }
+
         const messages = await Message.findAll({
-            where: { UserId: targetUserId, remoteJid: decodedJid },
+            where: { UserId: targetUserId, remoteJid: { [Op.in]: jids } },
             order: [['createdAt', 'ASC']],
-            limit: 50
+            limit: 70
         });
         // Reset unread count
         await Conversation.update(
             { unreadCount: 0 },
-            { where: { UserId: targetUserId, remoteJid: decodedJid } }
+            { where: { UserId: targetUserId, remoteJid: { [Op.in]: jids } } }
         );
         res.json({ success: true, messages });
     } catch (err) {
         console.error('GetMessages error:', err);
         res.status(500).json({ error: 'Failed to load messages' });
+    }
+});
+
+router.get('/livechat/api/conversations', async (req, res) => {
+    try {
+        let targetUserId = req.user.id;
+        if (req.user.role === 'sales') {
+            const adminUser = await User.findOne({ where: { role: 'admin' } });
+            if (adminUser) targetUserId = adminUser.id;
+        }
+
+        const conversations = await Conversation.findAll({
+            where: { UserId: targetUserId },
+            order: [['lastMessageAt', 'DESC']],
+            limit: 100
+        });
+        res.json({ success: true, conversations: JSON.parse(JSON.stringify(conversations)) });
+    } catch (err) {
+        console.error('GetConversations API error:', err);
+        res.status(500).json({ error: err.message || 'Failed to load conversations' });
     }
 });
 
@@ -1043,7 +1077,15 @@ const uploadLivechatMedia = multer({
     limits: { fileSize: 25 * 1024 * 1024 } // 25 MB max limit
 });
 
-router.post('/livechat/send-media', uploadLivechatMedia.single('mediaFile'), async (req, res) => {
+router.post('/livechat/send-media', (req, res, next) => {
+    uploadLivechatMedia.single('mediaFile')(req, res, (err) => {
+        if (err) {
+            console.error('Multer upload error in /livechat/send-media:', err);
+            return res.status(400).json({ error: err.message || 'خطأ أثناء رفع الملف' });
+        }
+        next();
+    });
+}, async (req, res) => {
     try {
         const { remoteJid, caption } = req.body;
         if (!remoteJid) return res.status(400).json({ error: 'remoteJid required' });
@@ -1054,18 +1096,23 @@ router.post('/livechat/send-media', uploadLivechatMedia.single('mediaFile'), asy
             const phone = remoteJid.split('@')[0];
             customer = await Customer.findOne({ where: { phoneNumber: phone } });
         }
-        if (!customer) {
-            const conv = await Conversation.findOne({ where: { remoteJid } });
-            if (conv && conv.CustomerId) {
-                customer = await Customer.findByPk(conv.CustomerId);
-            }
+        let conv = await Conversation.findOne({ where: { remoteJid } });
+        if (!conv && remoteJid.includes('@')) {
+            const phone = remoteJid.split('@')[0];
+            conv = await Conversation.findOne({ where: { phoneNumber: phone } });
         }
-        if (!customer) {
-            return res.status(404).json({ error: 'العميل غير موجود' });
+        if (!customer && conv && conv.CustomerId) {
+            customer = await Customer.findByPk(conv.CustomerId);
+        }
+
+        let botUserId = customer?.UserId || conv?.UserId || req.user.id;
+        if (req.user.role === 'sales' && !customer?.UserId && !conv?.UserId) {
+            const adminUser = await User.findOne({ where: { role: 'admin' } });
+            if (adminUser) botUserId = adminUser.id;
         }
 
         const savedMsg = await sendManualMediaMessage(
-            customer.UserId,
+            botUserId,
             remoteJid,
             req.file.path,
             req.file.mimetype,
@@ -1076,18 +1123,20 @@ router.post('/livechat/send-media', uploadLivechatMedia.single('mediaFile'), asy
         if (io) {
             const payload = {
                 ...savedMsg.toJSON(),
-                phoneNumber: customer.phoneNumber || null,
-                customerName: customer.customerName || null
+                phoneNumber: customer?.phoneNumber || conv?.phoneNumber || null,
+                customerName: customer?.customerName || conv?.customerName || null
             };
-            io.to(`user_${customer.UserId}`).emit('new_message', payload);
+            io.to(`user_${botUserId}`).emit('new_message', payload);
             io.to('crm_staff').emit('new_message', payload);
         }
 
-        try {
-            const { recordResponse } = await import('../services/kpiService.js');
-            await recordResponse(req.user.id, customer.id);
-        } catch (kpiErr) {
-            console.error('Error recording KPI response in /livechat/send-media:', kpiErr);
+        if (customer) {
+            try {
+                const { recordResponse } = await import('../services/kpiService.js');
+                await recordResponse(req.user.id, customer.id);
+            } catch (kpiErr) {
+                console.error('Error recording KPI response in /livechat/send-media:', kpiErr);
+            }
         }
 
         res.json({ success: true, message: savedMsg });

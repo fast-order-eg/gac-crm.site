@@ -344,21 +344,20 @@
                     </div>
                     <div class="lc-msgs" id="lcMsgs"></div>
 
-                    <!-- Outgoing Media Preview Overlay -->
-                    <div id="mediaPreviewOverlay" style="display:none; padding:8px 14px; background:rgba(15,23,42,0.95); border-top:1px solid rgba(255,255,255,0.07); align-items:center; gap:10px;">
-                        <div id="mediaPreviewThumb" style="width:42px; height:42px; border-radius:6px; background:#1e293b; display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid rgba(255,255,255,0.1); flex-shrink:0;">
-                            <i class="bi bi-file-earmark fs-4 text-white-50" id="mediaPreviewIcon"></i>
-                            <img id="mediaPreviewImg" src="" style="width:100%; height:100%; object-fit:cover; display:none;">
+                    <!-- Outgoing Media Attachment Bar -->
+                    <div id="mediaAttachmentBar" style="display:none; padding:8px 14px; background:rgba(30,41,59,0.98); border:1px solid rgba(255,255,255,0.12); border-radius:12px 12px 0 0; margin:0 8px -1px 8px; align-items:center; justify-content:space-between; gap:10px; box-shadow:0 -4px 12px rgba(0,0,0,0.25);">
+                        <div class="d-flex align-items-center gap-2 min-w-0 flex-grow-1">
+                            <div id="mediaPreviewThumb" style="width:40px; height:40px; border-radius:8px; background:#0f172a; display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid rgba(255,255,255,0.15); flex-shrink:0;">
+                                <i class="bi bi-file-earmark fs-5 text-white-50" id="mediaPreviewIcon"></i>
+                                <img id="mediaPreviewImg" src="" style="width:100%; height:100%; object-fit:cover; display:none;">
+                            </div>
+                            <div class="min-w-0 flex-grow-1">
+                                <div class="fw-semibold text-white text-truncate" id="mediaPreviewName" style="font-size:12px; max-width:240px;">ملف محدد</div>
+                                <div class="text-white-50" style="font-size:10px;">📎 مرفق جاهز للإرسال (اكتب رسالتك واضغط إرسال)</div>
+                            </div>
                         </div>
-                        <div class="flex-grow-1 min-w-0">
-                            <div class="fw-bold small text-white text-truncate" id="mediaPreviewName">ملف محدد</div>
-                            <input type="text" id="mediaCaptionIn" class="form-control form-control-sm mt-1" placeholder="أضف تعليقاً على المرفق (اختياري)..." style="font-size:12px; background:#1e293b; color:#fff; border-color:rgba(255,255,255,0.1); border-radius:6px;">
-                        </div>
-                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="cancelMediaPreview()" title="إلغاء">
-                            <i class="bi bi-x-lg"></i>
-                        </button>
-                        <button type="button" class="btn btn-sm btn-primary px-3 fw-bold" id="btnSendMedia" onclick="submitMediaUpload()" title="إرسال الميديا">
-                            <i class="bi bi-send-fill me-1"></i> إرسال
+                        <button type="button" class="btn btn-sm btn-link text-danger p-0 me-1" onclick="cancelMediaPreview()" title="إلغاء المرفق" style="font-size:20px; line-height:1; text-decoration:none;">
+                            <i class="bi bi-x-circle-fill"></i>
                         </button>
                     </div>
 
@@ -368,7 +367,7 @@
                             <i class="bi bi-paperclip"></i>
                         </button>
                         <textarea id="lcIn" placeholder="اكتب رسالة..." rows="1"></textarea>
-                        <button class="btn-ls" onclick="sendMsg()"><i class="bi bi-send-fill"></i></button>
+                        <button class="btn-ls" id="btnSendMain" onclick="sendMsg()"><i class="bi bi-send-fill"></i></button>
                     </div>
                 </div>
             </div>
@@ -382,11 +381,18 @@
     let isSendingMsg = false;
     const pendingLocalMessages = new Map();
 
-    const io_ = io();
-    io_.on('connect', () => {
+    // توحيد اتصال Socket.IO مع النافبار لمنع تصادم الجلسات وانقطاع السوكيت المتكرر
+    const io_ = window.socket || (typeof io !== 'undefined' ? io() : null);
+    if (io_) {
+        window.socket = io_;
         io_.emit('join_room', 'user_<%= targetUserId %>');
         io_.emit('join_room', 'crm_staff');
-    });
+        io_.on('connect', () => {
+            io_.emit('join_room', 'user_<%= targetUserId %>');
+            io_.emit('join_room', 'crm_staff');
+            syncCurrentChatAndList();
+        });
+    }
 
     function playMessageChime() {
         try {
@@ -405,132 +411,144 @@
         } catch (e) {}
     }
 
-    io_.on('new_message', msg => {
-        let content = msg.content ? msg.content.replace(/\[M:\d+\]/g, '').trim() : '';
-        if (!content && msg.media_url) {
-            content = 'مرفق وسائط';
+    function findContactItem(jid, phone) {
+        if (!jid && !phone) return null;
+        let el = null;
+        if (jid) el = document.querySelector(`.lc-item[data-jid="${jid}"]`);
+        if (!el && phone) el = document.querySelector(`.lc-item[data-phone="${phone}"]`);
+        if (!el && jid && jid.includes('@')) {
+            const raw = jid.split('@')[0];
+            el = document.querySelector(`.lc-item[data-phone="${raw}"]`) || document.querySelector(`.lc-item[data-jid*="${raw}"]`);
         }
+        return el;
+    }
 
-        // 1. البحث عن المحادثة في القائمة الجانبية (بمعرف JID أو برقم الهاتف)
-        let el = document.querySelector(`.lc-item[data-jid="${msg.remoteJid}"]`);
-        if (!el && msg.phoneNumber) {
-            el = document.querySelector(`.lc-item[data-phone="${msg.phoneNumber}"]`);
-        }
+    function isCurrentChat(jid, phone) {
+        if (!curJid) return false;
+        if (curJid === jid) return true;
+        if (curPhone && phone && curPhone === phone) return true;
+        if (curPhone && jid && jid.startsWith(curPhone)) return true;
+        if (curJid && phone && curJid.startsWith(phone)) return true;
+        return false;
+    }
 
-        const isLid = msg.remoteJid && msg.remoteJid.endsWith('@lid');
-        const phoneFromJid = (!isLid && msg.remoteJid && msg.remoteJid.endsWith('@s.whatsapp.net')) ? msg.remoteJid.split('@')[0] : '';
-        const phone = msg.phoneNumber || phoneFromJid || '';
-        const nm = msg.customerName || phone || (isLid ? 'عميل واتساب' : msg.remoteJid.split('@')[0]);
-        const ts = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'});
-
-        // 2. إذا كانت المحادثة جديدة وغير موجودة بالقائمة، ننشئها ديناميكياً ونضيفها في المقدمة فوراً
-        if (!el) {
-            const listContainer = document.querySelector('.lc-contacts-list');
-            if (listContainer) {
-                const emptyMsg = listContainer.querySelector('.text-center');
-                if (emptyMsg) emptyMsg.remove();
-
-                const safeNm = nm.replace(/"/g, '&quot;').replace(/'/g, '');
-                const initial = nm[0]?.toUpperCase() || '?';
-
-                el = document.createElement('div');
-                el.className = 'lc-item';
-                el.dataset.jid = msg.remoteJid;
-                el.dataset.handoff = msg.is_handoff ? 'true' : 'false';
-                el.dataset.name = nm;
-                el.dataset.phone = phone;
-                el.onclick = () => loadChat(msg.remoteJid, safeNm, msg.is_handoff || false, phone);
-
-                el.innerHTML = `
-                    <div class="lc-av ${msg.is_handoff ? 'handoff-av' : ''}">
-                        ${initial}
-                        ${msg.is_handoff ? '<div class="h-dot"></div>' : ''}
-                    </div>
-                    <div class="lc-info">
-                        <div class="lc-name">${nm}</div>
-                        ${phone ? `<div class="lc-phone"><span class="d-none d-md-inline">📞 </span>+${phone}</div>` : ''}
-                        <div class="lc-prev">${content}</div>
-                    </div>
-                    <div class="lc-meta">
-                        <div class="lc-t">${ts}</div>
-                        <span class="unread-pill">1</span>
-                    </div>
-                `;
-                listContainer.prepend(el);
-                if (msg.role === 'user') playMessageChime();
+    if (io_) {
+        io_.on('new_message', msg => {
+            let content = msg.content ? msg.content.replace(/\[M:\d+\]/g, '').trim() : '';
+            if (!content && msg.media_url) {
+                content = 'مرفق وسائط';
             }
-        } else {
-            // المحادثة موجودة: تحديث المعاينة ونقلها لأول القائمة
-            const prevEl = el.querySelector('.lc-prev');
-            if (prevEl) prevEl.textContent = content;
-            const tEl = el.querySelector('.lc-t');
-            if (tEl) tEl.textContent = ts;
-            if (el.parentElement) el.parentElement.prepend(el);
 
-            // لو ليست المحادثة المفتوحة حالياً وكانت رسالة من العميل، نزود عداد الرسائل غير المقروءة
-            const isThisChatActive = (curJid && (curJid === msg.remoteJid || (curPhone && phone && curPhone === phone)));
-            if (!isThisChatActive && msg.role === 'user') {
-                let badge = el.querySelector('.unread-pill');
-                if (!badge) {
-                    badge = document.createElement('span');
-                    badge.className = 'unread-pill';
-                    badge.textContent = '1';
-                    const metaEl = el.querySelector('.lc-meta');
-                    if (metaEl) metaEl.appendChild(badge);
-                } else {
-                    badge.textContent = (parseInt(badge.textContent) || 0) + 1;
-                }
-                playMessageChime();
-            }
-        }
+            const isLid = msg.remoteJid && msg.remoteJid.endsWith('@lid');
+            const phoneFromJid = (!isLid && msg.remoteJid && msg.remoteJid.endsWith('@s.whatsapp.net')) ? msg.remoteJid.split('@')[0] : '';
+            const phone = msg.phoneNumber || phoneFromJid || '';
+            const nm = msg.customerName || phone || (isLid ? 'عميل واتساب' : msg.remoteJid.split('@')[0]);
+            const ts = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'});
 
-        // 3. إذا كانت هذه المحادثة هي المفتوحة حالياً أمام المستخدم
-        const isCurrentChatOpen = (curJid && (curJid === msg.remoteJid || (curPhone && phone && curPhone === phone)));
-        if (isCurrentChatOpen) {
-            // منع التكرار للرسائل الصادرة التي تم عرضها محلياً للتو من هذا التبويب
-            if (msg.role !== 'user') {
-                const pendingKey = msg.media_url ? msg.media_url.trim() : content;
-                if (pendingKey && pendingLocalMessages.has(pendingKey)) {
-                    const count = pendingLocalMessages.get(pendingKey) || 1;
-                    if (count > 1) {
-                        pendingLocalMessages.set(pendingKey, count - 1);
-                    } else {
-                        pendingLocalMessages.delete(pendingKey);
-                    }
-                    return; // تم عرضها مسبقاً محلياً، لا نكررها
-                }
-            }
-            addBbl(content, msg.role === 'user', new Date(msg.createdAt), msg.media_url);
-        }
-    });
+            let el = findContactItem(msg.remoteJid, phone);
 
-    io_.on('conversation_updated', conv => {
-        let el = document.querySelector(`.lc-item[data-jid="${conv.remoteJid}"]`);
-        if (!el && conv.phoneNumber) {
-            el = document.querySelector(`.lc-item[data-phone="${conv.phoneNumber}"]`);
-        }
-        if (el) {
-            el.dataset.handoff = conv.is_handoff ? 'true' : 'false';
-            const av = el.querySelector('.lc-av');
-            if (conv.is_handoff) {
-                av.classList.add('handoff-av');
-                if (!av.querySelector('.h-dot')) {
-                    const dot = document.createElement('div');
-                    dot.className = 'h-dot';
-                    av.appendChild(dot);
+            if (!el) {
+                const listContainer = document.querySelector('.lc-contacts-list');
+                if (listContainer) {
+                    const emptyMsg = listContainer.querySelector('.text-center');
+                    if (emptyMsg) emptyMsg.remove();
+
+                    const safeNm = nm.replace(/"/g, '&quot;').replace(/'/g, '');
+                    const initial = nm[0]?.toUpperCase() || '?';
+
+                    el = document.createElement('div');
+                    el.className = 'lc-item';
+                    el.dataset.jid = msg.remoteJid;
+                    el.dataset.handoff = msg.is_handoff ? 'true' : 'false';
+                    el.dataset.name = nm;
+                    el.dataset.phone = phone;
+                    el.onclick = () => loadChat(msg.remoteJid, safeNm, msg.is_handoff || false, phone);
+
+                    el.innerHTML = `
+                        <div class="lc-av ${msg.is_handoff ? 'handoff-av' : ''}">
+                            ${initial}
+                            ${msg.is_handoff ? '<div class="h-dot"></div>' : ''}
+                        </div>
+                        <div class="lc-info">
+                            <div class="lc-name">${nm}</div>
+                            ${phone ? `<div class="lc-phone"><span class="d-none d-md-inline">📞 </span>+${phone}</div>` : ''}
+                            <div class="lc-prev">${content}</div>
+                        </div>
+                        <div class="lc-meta">
+                            <div class="lc-t">${ts}</div>
+                            <span class="unread-pill">1</span>
+                        </div>
+                    `;
+                    listContainer.prepend(el);
+                    if (msg.role === 'user') playMessageChime();
                 }
             } else {
-                av.classList.remove('handoff-av');
-                const dot = av.querySelector('.h-dot');
-                if (dot) dot.remove();
+                const prevEl = el.querySelector('.lc-prev');
+                if (prevEl) prevEl.textContent = content;
+                const tEl = el.querySelector('.lc-t');
+                if (tEl) tEl.textContent = ts;
+                if (el.parentElement) el.parentElement.prepend(el);
+
+                const isThisChatActive = isCurrentChat(msg.remoteJid, phone);
+                if (!isThisChatActive && msg.role === 'user') {
+                    let badge = el.querySelector('.unread-pill');
+                    if (!badge) {
+                        badge = document.createElement('span');
+                        badge.className = 'unread-pill';
+                        badge.textContent = '1';
+                        const metaEl = el.querySelector('.lc-meta');
+                        if (metaEl) metaEl.appendChild(badge);
+                    } else {
+                        badge.textContent = (parseInt(badge.textContent) || 0) + 1;
+                    }
+                    playMessageChime();
+                }
             }
-            const isMatch = curJid && (curJid === conv.remoteJid || (curPhone && conv.phoneNumber && curPhone === conv.phoneNumber));
-            if (isMatch) {
-                curHO = conv.is_handoff;
-                updHO(curHO);
+
+            const isCurrentChatOpen = isCurrentChat(msg.remoteJid, phone);
+            if (isCurrentChatOpen) {
+                if (msg.role !== 'user') {
+                    const pendingKey = msg.media_url ? msg.media_url.trim() : content;
+                    if (pendingKey && pendingLocalMessages.has(pendingKey)) {
+                        const count = pendingLocalMessages.get(pendingKey) || 1;
+                        if (count > 1) {
+                            pendingLocalMessages.set(pendingKey, count - 1);
+                        } else {
+                            pendingLocalMessages.delete(pendingKey);
+                        }
+                        return;
+                    }
+                }
+                addBbl(content, msg.role === 'user', new Date(msg.createdAt), msg.media_url, msg.id);
+                if (msg.role === 'user') playMessageChime();
             }
-        }
-    });
+        });
+
+        io_.on('conversation_updated', conv => {
+            let el = findContactItem(conv.remoteJid, conv.phoneNumber);
+            if (el) {
+                el.dataset.handoff = conv.is_handoff ? 'true' : 'false';
+                const av = el.querySelector('.lc-av');
+                if (conv.is_handoff) {
+                    av.classList.add('handoff-av');
+                    if (!av.querySelector('.h-dot')) {
+                        const dot = document.createElement('div');
+                        dot.className = 'h-dot';
+                        av.appendChild(dot);
+                    }
+                } else {
+                    av.classList.remove('handoff-av');
+                    const dot = av.querySelector('.h-dot');
+                    if (dot) dot.remove();
+                }
+                const isMatch = isCurrentChat(conv.remoteJid, conv.phoneNumber);
+                if (isMatch) {
+                    curHO = conv.is_handoff;
+                    updHO(curHO);
+                }
+            }
+        });
+    }
 
     let showOnlyHandoff = false;
 
@@ -613,7 +631,7 @@
         const box = document.getElementById('lcMsgs'); box.innerHTML = '';
         if (d.messages) d.messages.forEach(m => {
             let content = m.content ? m.content.replace(/\[M:\d+\]/g, '').trim() : '';
-            addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url);
+            addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url, m.id);
         });
         box.scrollTop = box.scrollHeight;
         const it = document.querySelector(`.lc-item[data-jid="${jid}"]`);
@@ -702,11 +720,12 @@
         if (curEl) curEl.textContent = '0:00';
     }
 
-    function addBbl(txt, isIn, date, mediaUrl) {
+    function addBbl(txt, isIn, date, mediaUrl, msgId) {
         if (!txt && !mediaUrl) return;
         const box = document.getElementById('lcMsgs');
         const d = document.createElement('div');
         d.className = `lc-bbl ${isIn ? 'bbl-in' : 'bbl-out'}`;
+        if (msgId) d.dataset.mid = msgId;
         const t = date ? date.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'}) : '';
 
         let contentHtml = '';
@@ -753,25 +772,130 @@
         box.scrollTop = box.scrollHeight;
     }
 
+    let selectedMediaFile = null;
+
+    function onFileSelected(input) {
+        if (!input.files || !input.files[0]) return;
+        selectedMediaFile = input.files[0];
+        const bar = document.getElementById('mediaAttachmentBar');
+        const nameEl = document.getElementById('mediaPreviewName');
+        const imgEl = document.getElementById('mediaPreviewImg');
+        const iconEl = document.getElementById('mediaPreviewIcon');
+
+        nameEl.textContent = selectedMediaFile.name;
+
+        if (selectedMediaFile.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                imgEl.src = e.target.result;
+                imgEl.style.display = 'block';
+                iconEl.style.display = 'none';
+            };
+            reader.readAsDataURL(selectedMediaFile);
+        } else {
+            imgEl.style.display = 'none';
+            iconEl.style.display = 'block';
+            if (selectedMediaFile.type.startsWith('video/')) iconEl.className = 'bi bi-film fs-4 text-warning';
+            else if (selectedMediaFile.type.startsWith('audio/')) iconEl.className = 'bi bi-music-note-beamed fs-4 text-success';
+            else iconEl.className = 'bi bi-file-earmark-text fs-4 text-primary';
+        }
+
+        bar.style.display = 'flex';
+        const inp = document.getElementById('lcIn');
+        inp.placeholder = 'أضف تعليقاً مع المرفق (اختياري)...';
+        inp.focus();
+    }
+
+    function cancelMediaPreview() {
+        selectedMediaFile = null;
+        const fileInput = document.getElementById('mediaFileInput');
+        if (fileInput) fileInput.value = '';
+        const bar = document.getElementById('mediaAttachmentBar');
+        if (bar) bar.style.display = 'none';
+        const inp = document.getElementById('lcIn');
+        if (inp) inp.placeholder = 'اكتب رسالة...';
+    }
+
     async function sendMsg() {
         const inp = document.getElementById('lcIn');
         const txt = inp.value.trim();
-        if (!txt || !curJid) return;
+        if (!curJid) return;
+        if (!txt && !selectedMediaFile) return;
 
-        // منع إرسال نفس الرسالة مرتين بالضغط السريع المزدوج (350ms Debounce)
+        // منع الإرسال المزدوج
         if (isSendingMsg) return;
         isSendingMsg = true;
-        setTimeout(() => { isSendingMsg = false; }, 350);
+        setTimeout(() => { isSendingMsg = false; }, 400);
 
-        // تفريغ خانة الإدخال فوراً وإبقاؤها مفعلة ومحددة ليكتب الموظف الرسالة التالية دون انتظار
+        const sendBtn = document.getElementById('btnSendMain') || document.querySelector('.btn-ls');
+        const originalBtnHtml = sendBtn ? sendBtn.innerHTML : '<i class="bi bi-send-fill"></i>';
+
+        // 1. إذا كان هناك ملف ميديا مرفق يتم إرساله فوراً عبر send-media
+        if (selectedMediaFile) {
+            const mediaToUpload = selectedMediaFile;
+            const captionText = txt;
+            cancelMediaPreview();
+            inp.value = '';
+            inp.style.height = 'auto';
+
+            if (sendBtn) {
+                sendBtn.disabled = true;
+                sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+            }
+
+            // عرض فقاعة مبدئية محلية
+            let localUrl = null;
+            if (mediaToUpload.type.startsWith('image/') || mediaToUpload.type.startsWith('video/') || mediaToUpload.type.startsWith('audio/')) {
+                try { localUrl = URL.createObjectURL(mediaToUpload); } catch(e){}
+            }
+            addBbl(captionText || 'مرفق وسائط', false, new Date(), localUrl);
+
+            const formData = new FormData();
+            formData.append('remoteJid', curJid);
+            formData.append('mediaFile', mediaToUpload);
+            if (captionText) formData.append('caption', captionText);
+
+            try {
+                const res = await fetch('/dashboard/livechat/send-media', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    if (data.message) {
+                        const mediaKey = data.message.media_url ? data.message.media_url.trim() : (data.message.content || '');
+                        if (mediaKey) {
+                            pendingLocalMessages.set(mediaKey, (pendingLocalMessages.get(mediaKey) || 0) + 1);
+                            setTimeout(() => {
+                                const c = pendingLocalMessages.get(mediaKey) || 0;
+                                if (c <= 1) pendingLocalMessages.delete(mediaKey);
+                                else pendingLocalMessages.set(mediaKey, c - 1);
+                            }, 45000);
+                        }
+                    }
+                } else {
+                    alert('فشل إرسال المرفق: ' + (data.error || 'خطأ في الخادم'));
+                }
+            } catch (err) {
+                console.error('Media upload error:', err);
+                alert('حدث خطأ في الاتصال أثناء إرسال المرفق');
+            } finally {
+                if (sendBtn) {
+                    sendBtn.disabled = false;
+                    sendBtn.innerHTML = originalBtnHtml;
+                }
+                inp.focus();
+            }
+            return;
+        }
+
+        // 2. إرسال رسالة نصية عادية
         inp.value = '';
         inp.style.height = 'auto';
         inp.focus();
 
-        // إضافة فقاعة الرسالة فوراً على الشاشة
         addBbl(txt, false, new Date());
 
-        // تسجيلها في العداد المحلي لمنع تكرار العرض عند استقبال بث السوكيت
         const curCount = pendingLocalMessages.get(txt) || 0;
         pendingLocalMessages.set(txt, curCount + 1);
         setTimeout(() => {
@@ -802,90 +926,133 @@
         }
     }
 
-    // --- Outgoing Media Upload Logic ---
-    let selectedMediaFile = null;
-
-    function onFileSelected(input) {
-        if (!input.files || !input.files[0]) return;
-        selectedMediaFile = input.files[0];
-        const overlay = document.getElementById('mediaPreviewOverlay');
-        const nameEl = document.getElementById('mediaPreviewName');
-        const imgEl = document.getElementById('mediaPreviewImg');
-        const iconEl = document.getElementById('mediaPreviewIcon');
-        const captionIn = document.getElementById('mediaCaptionIn');
-
-        nameEl.textContent = selectedMediaFile.name;
-        captionIn.value = '';
-
-        if (selectedMediaFile.type.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                imgEl.src = e.target.result;
-                imgEl.style.display = 'block';
-                iconEl.style.display = 'none';
-            };
-            reader.readAsDataURL(selectedMediaFile);
-        } else {
-            imgEl.style.display = 'none';
-            iconEl.style.display = 'block';
-            if (selectedMediaFile.type.startsWith('video/')) iconEl.className = 'bi bi-film fs-4 text-warning';
-            else if (selectedMediaFile.type.startsWith('audio/')) iconEl.className = 'bi bi-music-note-beamed fs-4 text-success';
-            else iconEl.className = 'bi bi-file-earmark-text fs-4 text-primary';
-        }
-
-        overlay.style.display = 'flex';
-    }
-
-    function cancelMediaPreview() {
-        selectedMediaFile = null;
-        document.getElementById('mediaFileInput').value = '';
-        document.getElementById('mediaPreviewOverlay').style.display = 'none';
-    }
-
-    async function submitMediaUpload() {
-        if (!selectedMediaFile || !curJid) return;
-        const btn = document.getElementById('btnSendMedia');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>إرسال...';
-
-        const caption = document.getElementById('mediaCaptionIn').value.trim();
-        const formData = new FormData();
-        formData.append('remoteJid', curJid);
-        formData.append('mediaFile', selectedMediaFile);
-        if (caption) formData.append('caption', caption);
-
+    // --- Automatic Background Sync System (لضمان ظهور الرسائل فورياً دون الحاجة لريفريش) ---
+    let isSyncing = false;
+    async function syncCurrentChatAndList() {
+        if (isSyncing) return;
+        isSyncing = true;
         try {
-            const res = await fetch('/dashboard/livechat/send-media', {
-                method: 'POST',
-                body: formData
-            });
-            const data = await res.json();
-            if (data.success) {
-                cancelMediaPreview();
-                if (data.message) {
-                    const mediaKey = data.message.media_url ? data.message.media_url.trim() : (data.message.content || '');
-                    if (mediaKey) {
-                        const curCount = pendingLocalMessages.get(mediaKey) || 0;
-                        pendingLocalMessages.set(mediaKey, curCount + 1);
-                        setTimeout(() => {
-                            const c = pendingLocalMessages.get(mediaKey) || 0;
-                            if (c <= 1) pendingLocalMessages.delete(mediaKey);
-                            else pendingLocalMessages.set(mediaKey, c - 1);
-                        }, 45000);
+            // 1. مزامنة المحادثة المفتوحة حالياً إن وجدت
+            if (curJid) {
+                const r = await fetch(`/dashboard/livechat/${encodeURIComponent(curJid)}/messages`);
+                if (r.ok) {
+                    const d = await r.json();
+                    if (d.success && Array.isArray(d.messages)) {
+                        const box = document.getElementById('lcMsgs');
+                        const existingMids = new Set(Array.from(box.querySelectorAll('.lc-bbl[data-mid]')).map(el => el.dataset.mid));
+                        let hasNew = false;
+                        d.messages.forEach(m => {
+                            if (!existingMids.has(String(m.id))) {
+                                let content = m.content ? m.content.replace(/\[M:\d+\]/g, '').trim() : '';
+                                addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url, m.id);
+                                existingMids.add(String(m.id));
+                                hasNew = true;
+                                if (m.role === 'user') playMessageChime();
+                            }
+                        });
+                        if (hasNew) {
+                            box.scrollTop = box.scrollHeight;
+                        }
                     }
-                    addBbl(data.message.content, false, new Date(data.message.createdAt), data.message.media_url);
                 }
-            } else {
-                alert('فشل إرسال المرفق: ' + (data.error || 'خطأ'));
             }
-        } catch (err) {
-            console.error('Upload error:', err);
-            alert('حدث خطأ أثناء رفع الملف');
+
+            // 2. مزامنة القائمة الجانبية للمحادثات
+            const cRes = await fetch('/dashboard/livechat/api/conversations');
+            if (cRes.ok) {
+                const cData = await cRes.json();
+                if (cData.success && Array.isArray(cData.conversations)) {
+                    updateContactsListFromData(cData.conversations);
+                }
+            }
+        } catch (e) {
+            // تجاهل أي خطأ مؤقت للشبكة
         } finally {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-send-fill me-1"></i> إرسال';
+            isSyncing = false;
         }
     }
+
+    function updateContactsListFromData(conversations) {
+        const listContainer = document.querySelector('.lc-contacts-list');
+        if (!listContainer || !conversations) return;
+
+        conversations.forEach(c => {
+            const isLid = c.remoteJid.endsWith('@lid');
+            const phoneFromJid = (!isLid && c.remoteJid.endsWith('@s.whatsapp.net')) ? c.remoteJid.split('@')[0] : '';
+            const phone = c.phoneNumber || phoneFromJid || '';
+            const nm = c.customerName || phone || (isLid ? 'عميل' : c.remoteJid.split('@')[0]);
+            const ts = new Date(c.lastMessageAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'});
+            const content = c.lastMessageText ? c.lastMessageText.replace(/\[M:\d+\]/g, '').trim() : '...';
+
+            let el = findContactItem(c.remoteJid, phone);
+            if (!el) {
+                const emptyMsg = listContainer.querySelector('.text-center');
+                if (emptyMsg) emptyMsg.remove();
+
+                const safeNm = nm.replace(/"/g, '&quot;').replace(/'/g, '');
+                const initial = nm[0]?.toUpperCase() || '?';
+
+                el = document.createElement('div');
+                el.className = 'lc-item';
+                el.dataset.jid = c.remoteJid;
+                el.dataset.handoff = c.is_handoff ? 'true' : 'false';
+                el.dataset.name = nm;
+                el.dataset.phone = phone;
+                el.onclick = () => loadChat(c.remoteJid, safeNm, c.is_handoff || false, phone);
+
+                el.innerHTML = `
+                    <div class="lc-av ${c.is_handoff ? 'handoff-av' : ''}">
+                        ${initial}
+                        ${c.is_handoff ? '<div class="h-dot"></div>' : ''}
+                    </div>
+                    <div class="lc-info">
+                        <div class="lc-name">${nm}</div>
+                        ${phone ? `<div class="lc-phone"><span class="d-none d-md-inline">📞 </span>+${phone}</div>` : ''}
+                        <div class="lc-prev">${content}</div>
+                    </div>
+                    <div class="lc-meta">
+                        <div class="lc-t">${ts}</div>
+                        ${c.unreadCount > 0 ? `<span class="unread-pill">${c.unreadCount}</span>` : ''}
+                    </div>
+                `;
+                listContainer.prepend(el);
+            } else {
+                const prevEl = el.querySelector('.lc-prev');
+                if (prevEl && prevEl.textContent !== content) prevEl.textContent = content;
+                const tEl = el.querySelector('.lc-t');
+                if (tEl) tEl.textContent = ts;
+
+                const isThisChatActive = isCurrentChat(c.remoteJid, phone);
+                let badge = el.querySelector('.unread-pill');
+                if (isThisChatActive) {
+                    if (badge) badge.remove();
+                } else if (c.unreadCount > 0) {
+                    if (!badge) {
+                        badge = document.createElement('span');
+                        badge.className = 'unread-pill';
+                        const metaEl = el.querySelector('.lc-meta');
+                        if (metaEl) metaEl.appendChild(badge);
+                    }
+                    badge.textContent = c.unreadCount;
+                } else if (badge) {
+                    badge.remove();
+                }
+            }
+        });
+    }
+
+    // مزامنة فورية عند العودة لتبويب المتصفح بعد فتح الواتساب أو بعد تشغيل شاشة الهاتف
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            syncCurrentChatAndList();
+        }
+    });
+    window.addEventListener('focus', () => {
+        syncCurrentChatAndList();
+    });
+
+    // مزامنة دورية كل 5 ثوانٍ لضمان ظهور أي رسائل لحظياً حتى في حال تذبذب السوكيت
+    setInterval(syncCurrentChatAndList, 5000);
 
     async function doHandoff() {
         if (!curJid) return;

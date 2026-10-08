@@ -1876,8 +1876,13 @@ export const startSession = async (userId, io, phoneNumber = null) => {
 
                 // 6. بث فوري لصفحة اللايف شات عبر Socket.IO
                 if (io) {
-                    io.to(`user_${userId}`).emit('new_message', savedMsg);
-                    io.to('crm_staff').emit('new_message', savedMsg);
+                    const payload = {
+                        ...(savedMsg.toJSON ? savedMsg.toJSON() : savedMsg),
+                        phoneNumber: phoneNumber || null,
+                        customerName: customer?.customerName || phoneNumber || null
+                    };
+                    io.to(`user_${userId}`).emit('new_message', payload);
+                    io.to('crm_staff').emit('new_message', payload);
                     io.to(`user_${userId}`).emit('conversation_updated', conv);
                     io.to('crm_staff').emit('conversation_updated', conv);
                 }
@@ -3957,8 +3962,26 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
         await sock.sendPresenceUpdate(presence, remoteJid);
     } catch (pErr) {}
 
-    // إرسال فوري ومباشر
-    const sentMsg = await sock.sendMessage(remoteJid, messageContent);
+    // إرسال فوري ومباشر مع Fallback ذكي إذا كان المعرف من نوع LID
+    let sentMsg;
+    let finalRemoteJid = remoteJid;
+    try {
+        sentMsg = await sock.sendMessage(remoteJid, messageContent);
+    } catch (primaryErr) {
+        if (remoteJid && remoteJid.endsWith('@lid')) {
+            const phone = lidPhoneMap.get(remoteJid) || (await Customer.findOne({ where: { remoteJid } }))?.phoneNumber;
+            if (phone) {
+                const phoneJid = `${phone}@s.whatsapp.net`;
+                console.log(`⚠️ فشل إرسال الوسائط إلى LID ${remoteJid} (${primaryErr.message})، جاري المحاولة على رقم الهاتف: ${phoneJid}`);
+                sentMsg = await sock.sendMessage(phoneJid, messageContent);
+                finalRemoteJid = phoneJid;
+            } else {
+                throw primaryErr;
+            }
+        } else {
+            throw primaryErr;
+        }
+    }
 
     if (sentMsg?.key?.id) {
         recentSystemMsgIds.add(sentMsg.key.id);
@@ -3987,9 +4010,12 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
         status: 'sent'
     });
 
+    const jidUpdateList = [remoteJid];
+    if (finalRemoteJid && finalRemoteJid !== remoteJid) jidUpdateList.push(finalRemoteJid);
+
     await Conversation.update(
         { lastMessageText: logText, lastMessageAt: new Date() },
-        { where: { UserId: userId, remoteJid } }
+        { where: { UserId: userId, remoteJid: { [Op.in]: jidUpdateList } } }
     );
 
     return savedMsg;
