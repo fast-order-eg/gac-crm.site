@@ -613,13 +613,25 @@
     let isSendingMsg = false;
     const pendingLocalMessages = new Map();
 
-    // توحيد اتصال Socket.IO مع النافبار لمنع تصادم الجلسات وانقطاع السوكيت المتكرر
-    const io_ = window.socket || (typeof io !== 'undefined' ? io() : null);
+    function cleanPhone(p) {
+        if (!p) return '';
+        return String(p).replace(/\D/g, '');
+    }
+
+    // توحيد اتصال Socket.IO مع النافبار مع خيارات إعادة الاتصال التلقائي الصارمة للموبايل
+    const io_ = window.socket || (typeof io !== 'undefined' ? io({
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000
+    }) : null);
     if (io_) {
         window.socket = io_;
         io_.emit('join_room', 'user_<%= targetUserId %>');
         io_.emit('join_room', 'crm_staff');
         io_.on('connect', () => {
+            console.log('🔌 [LiveChat Socket] Connected to user_<%= targetUserId %> and crm_staff');
             io_.emit('join_room', 'user_<%= targetUserId %>');
             io_.emit('join_room', 'crm_staff');
             syncCurrentChatAndList();
@@ -629,6 +641,9 @@
     function playMessageChime() {
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') {
+                ctx.resume().catch(() => {});
+            }
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = 'sine';
@@ -648,9 +663,18 @@
         let el = null;
         if (jid) el = document.querySelector(`.lc-item[data-jid="${jid}"]`);
         if (!el && phone) el = document.querySelector(`.lc-item[data-phone="${phone}"]`);
+        
+        const cPhone = cleanPhone(phone);
+        if (!el && cPhone && cPhone.length >= 7) {
+            el = document.querySelector(`.lc-item[data-phone*="${cPhone}"]`);
+        }
         if (!el && jid && jid.includes('@')) {
             const raw = jid.split('@')[0];
+            const cRaw = cleanPhone(raw);
             el = document.querySelector(`.lc-item[data-phone="${raw}"]`) || document.querySelector(`.lc-item[data-jid*="${raw}"]`);
+            if (!el && cRaw && cRaw.length >= 7) {
+                el = document.querySelector(`.lc-item[data-phone*="${cRaw}"]`) || document.querySelector(`.lc-item[data-jid*="${cRaw}"]`);
+            }
         }
         return el;
     }
@@ -658,9 +682,11 @@
     function isCurrentChat(jid, phone) {
         if (!curJid) return false;
         if (curJid === jid) return true;
-        if (curPhone && phone && curPhone === phone) return true;
-        if (curPhone && jid && jid.startsWith(curPhone)) return true;
-        if (curJid && phone && curJid.startsWith(phone)) return true;
+        const cCurPhone = cleanPhone(curPhone);
+        const cPhone = cleanPhone(phone);
+        if (cCurPhone && cPhone && (cCurPhone === cPhone || cCurPhone.endsWith(cPhone) || cPhone.endsWith(cCurPhone))) return true;
+        if (cCurPhone && jid && jid.includes(cCurPhone)) return true;
+        if (curJid && cPhone && curJid.includes(cPhone)) return true;
         return false;
     }
 
@@ -844,8 +870,11 @@
     });
 
     function goBackToList() {
+        curJid = null;
+        curPhone = null;
         const outer = document.querySelector('.lc-outer');
         if (outer) outer.classList.remove('lc-show-chat');
+        document.querySelectorAll('.lc-item.active').forEach(el => el.classList.remove('active'));
     }
 
     function copyPhone() {
@@ -1469,7 +1498,9 @@
         try {
             // 1. مزامنة المحادثة المفتوحة حالياً إن وجدت
             if (curJid) {
-                const r = await fetch(`/dashboard/livechat/${encodeURIComponent(curJid)}/messages`);
+                const r = await fetch(`/dashboard/livechat/${encodeURIComponent(curJid)}/messages`, {
+                    signal: AbortSignal.timeout(4500)
+                });
                 if (r.ok) {
                     const d = await r.json();
                     if (d.success && Array.isArray(d.messages)) {
@@ -1515,7 +1546,9 @@
             }
 
             // 2. مزامنة القائمة الجانبية للمحادثات
-            const cRes = await fetch('/dashboard/livechat/api/conversations');
+            const cRes = await fetch('/dashboard/livechat/api/conversations', {
+                signal: AbortSignal.timeout(4500)
+            });
             if (cRes.ok) {
                 const cData = await cRes.json();
                 if (cData.success && Array.isArray(cData.conversations)) {
@@ -1596,6 +1629,9 @@
                 const tEl = el.querySelector('.lc-t');
                 if (tEl) tEl.textContent = ts;
 
+                // مهم جداً للموبايل: رفع المحادثة المحدثة لأعلى القائمة
+                if (el.parentElement) el.parentElement.prepend(el);
+
                 const isThisChatActive = isCurrentChat(c.remoteJid, phone);
                 let badge = el.querySelector('.unread-pill');
                 if (isThisChatActive) {
@@ -1615,18 +1651,31 @@
         });
     }
 
+    function handleMobileWakeUp() {
+        if (window.socket) {
+            if (!window.socket.connected) {
+                console.log('📱 [Mobile Wakeup] Socket disconnected, forcing reconnect...');
+                window.socket.connect();
+            } else {
+                window.socket.emit('join_room', 'user_<%= targetUserId %>');
+                window.socket.emit('join_room', 'crm_staff');
+            }
+        }
+        syncCurrentChatAndList();
+    }
+
     // مزامنة فورية عند العودة لتبويب المتصفح بعد فتح الواتساب أو بعد تشغيل شاشة الهاتف
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-            syncCurrentChatAndList();
+            handleMobileWakeUp();
         }
     });
-    window.addEventListener('focus', () => {
-        syncCurrentChatAndList();
-    });
+    window.addEventListener('focus', handleMobileWakeUp);
+    window.addEventListener('pageshow', handleMobileWakeUp);
+    window.addEventListener('online', handleMobileWakeUp);
 
-    // مزامنة دورية كل 5 ثوانٍ لضمان ظهور أي رسائل لحظياً حتى في حال تذبذب السوكيت
-    setInterval(syncCurrentChatAndList, 5000);
+    // مزامنة دورية كل 4 ثوانٍ لضمان ظهور أي رسائل لحظياً حتى في حال تذبذب السوكيت
+    setInterval(syncCurrentChatAndList, 4000);
 
     async function doHandoff() {
         if (!curJid) return;

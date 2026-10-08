@@ -51,6 +51,18 @@ const contactTextBufferMap = new Map();
 const groupMetadataCache = new Map(); // groupId -> { data, expiresAt }
 const participatingGroupsCache = new Map(); // userId -> { data, expiresAt }
 
+// Helper: Broadcast new_message to both the owner room and crm_staff room
+export function broadcastNewMessage(io, userId, payload) {
+    if (!io) return;
+    try {
+        const msgData = payload?.toJSON ? payload.toJSON() : payload;
+        if (userId) io.to(`user_${userId}`).emit('new_message', msgData);
+        io.to('crm_staff').emit('new_message', msgData);
+    } catch (e) {
+        console.error('⚠️ [broadcastNewMessage] Error:', e.message);
+    }
+}
+
 // Helper: Get Group Metadata with 30-min Memory Cache (Anti-Ban: prevents spamming groupMetadata API)
 async function getCachedGroupMetadata(sock, groupJid) {
     const cached = groupMetadataCache.get(groupJid);
@@ -193,7 +205,7 @@ export async function sendHumanMessage(sock, remoteJid, content, options = {}) {
                     messageId: sentMsg?.key?.id
                 });
                 if (io) {
-                    io.to(`user_${userId}`).emit('new_message', savedMsg);
+                    broadcastNewMessage(io, userId, savedMsg);
                 }
             } catch (saveErr) {
                 console.error("Failed to save bot message to DB:", saveErr);
@@ -977,7 +989,7 @@ async function sendInteractiveButtons(sock, remoteJid, userId, io, menuId = null
             content: dbMenuText,
             messageId: sentMenuMsg?.key?.id || null
         });
-        if (io) io.to(`user_${userId}`).emit('new_message', savedMsg);
+        if (io) broadcastNewMessage(io, userId, savedMsg);
 
         console.log(`🔘 [Text Menu] Sent menu ${menu.id} to ${remoteJid}`);
         return true;
@@ -1159,7 +1171,7 @@ async function handleButtonResponse(sock, remoteJid, buttonId, userId, io, extra
                         content: successMsg,
                         messageId: sentRespSuccess?.key?.id || null
                     });
-                    io.to(`user_${userId}`).emit('new_message', savedResp);
+                    broadcastNewMessage(io, userId, savedResp);
 
                     const notifyMsg = `🎉 *تم تفعيل اشتراك جديد تلقائياً (زر تفاعلي)!* 🎉\n\n👤 العميل: ${customer.customerName || 'عميل واتساب'}\n📞 الرقم: ${customer.phoneNumber}\n📧 البريد: ${customer.email}\n💵 القيمة: ${customer.paymentAmount || '500 EGP'}\n\nتم التحقق من صورة الإيصال والبريد وتفعيل العميل بنجاح في الـ CRM! 🎉`;
                     await notifyControlGroup(userId, notifyMsg);
@@ -1184,7 +1196,7 @@ async function handleButtonResponse(sock, remoteJid, buttonId, userId, io, extra
                         content: missingMsg,
                         messageId: sentRespMissing?.key?.id || null
                     });
-                    io.to(`user_${userId}`).emit('new_message', savedResp);
+                    broadcastNewMessage(io, userId, savedResp);
                     
                     skipStandardResponse = true;
                 }
@@ -1230,7 +1242,7 @@ async function handleButtonResponse(sock, remoteJid, buttonId, userId, io, extra
                 content: responseTextToSend,
                 messageId: sentBtnResp?.key?.id || null
             });
-            io.to(`user_${userId}`).emit('new_message', savedResp);
+            broadcastNewMessage(io, userId, savedResp);
         }
 
         // If button has NextMenuId, show the next menu
@@ -1284,7 +1296,7 @@ export async function handleFunnelStep(sock, remoteJid, customer, userText, msg,
             content: contentToSave,
             messageId: sentMsg?.key?.id || null
         });
-        if (io) io.to(`user_${userId}`).emit('new_message', savedMsg);
+        if (io) broadcastNewMessage(io, userId, savedMsg);
     };
 
     // 1. WELCOME STEP
@@ -1415,7 +1427,7 @@ export async function handleFunnelStep(sock, remoteJid, customer, userText, msg,
                     content: `[صورة الضمانات]\n\n${guaranteesMsg}`,
                     messageId: sentImg?.key?.id || null
                 });
-                if (io) io.to(`user_${userId}`).emit('new_message', savedMsg);
+                if (io) broadcastNewMessage(io, userId, savedMsg);
             } else {
                 await sendAndSave(guaranteesMsg);
             }
@@ -2095,7 +2107,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 const button = await InteractiveButton.findOne({ where: { buttonId: selectedId, UserId: userId, isActive: true } });
                 const selectionText = button ? button.label : selectedId;
                 const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: selectionText, messageId: msg.key?.id || null });
-                io.to(`user_${userId}`).emit('new_message', savedSel);
+                broadcastNewMessage(io, userId, savedSel);
 
                 await handleButtonResponse(sock, remoteJid, selectedId, userId, io, phoneNumber);
                 return;
@@ -2115,7 +2127,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         const button = await InteractiveButton.findOne({ where: { buttonId: selectedId, UserId: userId, isActive: true } });
                         const selectionText = button ? button.label : selectedId;
                         const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: selectionText, messageId: msg.key?.id || null });
-                        io.to(`user_${userId}`).emit('new_message', savedSel);
+                        broadcastNewMessage(io, userId, savedSel);
 
                         await handleButtonResponse(sock, remoteJid, selectedId, userId, io, phoneNumber);
                         return;
@@ -2153,7 +2165,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         console.log(`🔘 [Text Menu] Customer ${remoteJid} selected: ${selectedBtn.buttonId} by typing number ${userChoice}`);
                         
                         const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: text, messageId: msg.key?.id || null });
-                        io.to(`user_${userId}`).emit('new_message', savedSel);
+                        broadcastNewMessage(io, userId, savedSel);
 
                         await handleButtonResponse(sock, remoteJid, selectedBtn.buttonId, userId, io, phoneNumber);
                         return;
@@ -2203,13 +2215,19 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 quotedSender
             });
             if (io) {
+                let resolvedPhone = phoneNumber;
+                if (!resolvedPhone) {
+                    const existingCust = await Customer.findOne({ where: { UserId: userId, remoteJid } });
+                    if (existingCust && existingCust.phoneNumber) {
+                        resolvedPhone = existingCust.phoneNumber;
+                    }
+                }
                 const msgPayload = {
                     ...savedMsg.toJSON(),
-                    phoneNumber: phoneNumber || null,
-                    customerName: msg.pushName || phoneNumber || null
+                    phoneNumber: resolvedPhone || null,
+                    customerName: msg.pushName || resolvedPhone || null
                 };
-                io.to(`user_${userId}`).emit('new_message', msgPayload);
-                io.to('crm_staff').emit('new_message', msgPayload);
+                broadcastNewMessage(io, userId, msgPayload);
             }
         }
 
@@ -2432,7 +2450,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         content: replyText,
                         messageId: sentAbkarino?.key?.id || null
                     });
-                    io.to(`user_${userId}`).emit('new_message', savedResponse);
+                    broadcastNewMessage(io, userId, savedResponse);
                     return; // Stop processing further
                 }
             } catch (err) {
@@ -2669,7 +2687,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 content: handoffMsg,
                 messageId: sentHandoff?.key?.id || null
             });
-            io.to(`user_${userId}`).emit('new_message', svHandoff);
+            broadcastNewMessage(io, userId, svHandoff);
 
             // Notify Control Group
             try {
@@ -2730,7 +2748,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     content: guidanceMsg,
                     messageId: sentGuidance?.key?.id || null
                 });
-                if (io) io.to(`user_${userId}`).emit('new_message', svGuidance);
+                if (io) broadcastNewMessage(io, userId, svGuidance);
             }
             
             // Re-send the last menu that was sent to this customer, or default menu
@@ -2847,7 +2865,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     content: handoffMsg,
                     messageId: sentAiHandoff?.key?.id || null
                 });
-                io.to('user_' + userId).emit('new_message', sv);
+                broadcastNewMessage(io, userId, sv);
 
                 // 3. Notify Control Group (GAC CRM)
                 try {
@@ -2924,7 +2942,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 content: replyText,
                 messageId: sentVertexReply?.key?.id || null
             });
-            io.to(`user_${userId}`).emit('new_message', savedResponse);
+            broadcastNewMessage(io, userId, savedResponse);
 
             // 4. Send requested products (from JSON `show_products`)
             if (aiResponse && aiResponse.show_products && aiResponse.show_products.length > 0) {

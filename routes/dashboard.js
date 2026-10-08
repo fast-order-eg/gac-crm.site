@@ -908,13 +908,44 @@ router.post('/instructions/delete-image', async (req, res) => {
 // ============================================================
 // 💬 LIVE CHAT - Human Handoff Routes
 // ============================================================
+// دالة مساعدة لتوحيد معرف المستخدم المالك لجلسة الواتساب لجميع الموظفين والإدارة
+async function getLivechatTargetUserId(currentUser) {
+    try {
+        // 1. فحص المستخدم الذي يملك جلسة واتساب نشطة (auto_reply)
+        const activeBot = await User.findOne({ 
+            where: { auto_reply: true },
+            order: [['id', 'ASC']]
+        });
+        if (activeBot) return activeBot.id;
+
+        // 2. فحص المستخدم الذي لديه محادثات في قاعدة البيانات
+        const convOwner = await Conversation.findOne({
+            attributes: ['UserId'],
+            order: [['lastMessageAt', 'DESC']]
+        });
+        if (convOwner && convOwner.UserId) return convOwner.UserId;
+
+        // 3. فحص أي أدمن لديه رقم مربوط
+        const adminWithPhone = await User.findOne({
+            where: { linked_phone_number: { [Op.ne]: null } },
+            order: [['id', 'ASC']]
+        });
+        if (adminWithPhone) return adminWithPhone.id;
+
+        // 4. كحل أخير، جلب أول أدمن أو سوبر أدمن
+        const defaultAdmin = await User.findOne({
+            where: { role: ['admin', 'super_admin'] },
+            order: [['id', 'ASC']]
+        });
+        return defaultAdmin ? defaultAdmin.id : currentUser.id;
+    } catch (e) {
+        return currentUser ? currentUser.id : 1;
+    }
+}
+
 router.get('/livechat', async (req, res) => {
     try {
-        let targetUserId = req.user.id;
-        if (req.user.role === 'sales') {
-            const adminUser = await User.findOne({ where: { role: 'admin' } });
-            if (adminUser) targetUserId = adminUser.id;
-        }
+        const targetUserId = await getLivechatTargetUserId(req.user);
 
         const conversations = await Conversation.findAll({
             where: { UserId: targetUserId },
@@ -937,11 +968,7 @@ router.get('/livechat', async (req, res) => {
 
 router.get('/livechat/:remoteJid/messages', async (req, res) => {
     try {
-        let targetUserId = req.user.id;
-        if (req.user.role === 'sales') {
-            const adminUser = await User.findOne({ where: { role: 'admin' } });
-            if (adminUser) targetUserId = adminUser.id;
-        }
+        const targetUserId = await getLivechatTargetUserId(req.user);
 
         const { remoteJid } = req.params;
         const decodedJid = decodeURIComponent(remoteJid);
@@ -959,11 +986,14 @@ router.get('/livechat/:remoteJid/messages', async (req, res) => {
             }
         }
 
+        // جلب أحدث 70 رسالة تنازلياً ثم عكسها لترتيبها تصاعدياً بشكل سليم
         const messages = await Message.findAll({
             where: { UserId: targetUserId, remoteJid: { [Op.in]: jids } },
-            order: [['createdAt', 'ASC']],
+            order: [['createdAt', 'DESC']],
             limit: 70
         });
+        messages.reverse();
+
         // Reset unread count
         await Conversation.update(
             { unreadCount: 0 },
@@ -978,11 +1008,7 @@ router.get('/livechat/:remoteJid/messages', async (req, res) => {
 
 router.get('/livechat/api/conversations', async (req, res) => {
     try {
-        let targetUserId = req.user.id;
-        if (req.user.role === 'sales') {
-            const adminUser = await User.findOne({ where: { role: 'admin' } });
-            if (adminUser) targetUserId = adminUser.id;
-        }
+        const targetUserId = await getLivechatTargetUserId(req.user);
 
         const conversations = await Conversation.findAll({
             where: { UserId: targetUserId },
@@ -1188,11 +1214,7 @@ router.post('/livechat/react', async (req, res) => {
 
 router.post('/livechat/handoff', async (req, res) => {
     try {
-        let targetUserId = req.user.id;
-        if (req.user.role === 'sales') {
-            const adminUser = await User.findOne({ where: { role: 'admin' } });
-            if (adminUser) targetUserId = adminUser.id;
-        }
+        const targetUserId = await getLivechatTargetUserId(req.user);
 
         const { remoteJid, enable } = req.body;
         if (!remoteJid) return res.status(400).json({ error: 'remoteJid required' });
@@ -1200,6 +1222,16 @@ router.post('/livechat/handoff', async (req, res) => {
             { is_handoff: enable === true || enable === 'true' },
             { where: { UserId: targetUserId, remoteJid } }
         );
+
+        const io = req.app.get('socketio');
+        if (io) {
+            const updatedConv = await Conversation.findOne({ where: { UserId: targetUserId, remoteJid } });
+            if (updatedConv) {
+                io.to(`user_${targetUserId}`).emit('conversation_updated', updatedConv);
+                io.to('crm_staff').emit('conversation_updated', updatedConv);
+            }
+        }
+
         res.json({ success: true });
     } catch (err) {
         console.error('Handoff error:', err);

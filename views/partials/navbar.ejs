@@ -295,13 +295,26 @@
 
         function initializeSocketAndNotifications() {
             if (typeof io !== 'undefined') {
-                const socket = io();
+                const socket = window.socket || io({
+                    reconnection: true,
+                    reconnectionAttempts: Infinity,
+                    reconnectionDelay: 1000,
+                    reconnectionDelayMax: 5000,
+                    timeout: 20000
+                });
                 window.socket = socket;
                 
                 socket.emit('join_room', `user_${currentUserId}`);
                 socket.emit('join_room', 'crm_staff');
                 console.log(`🔌 Connected to notifications room: user_${currentUserId} and crm_staff`);
 
+                socket.off('navbar_connect_room');
+                socket.on('connect', () => {
+                    socket.emit('join_room', `user_${currentUserId}`);
+                    socket.emit('join_room', 'crm_staff');
+                });
+
+                socket.off('notification');
                 socket.on('notification', (data) => {
                     console.log('🔔 New notification received:', data);
                     
@@ -320,6 +333,7 @@
                 });
 
                 // الاستماع لرسائل العملاء الجديدة عند التواجد في أي صفحة غير اللايف شات
+                socket.off('navbar_new_msg');
                 socket.on('new_message', (msg) => {
                     if (!window.location.pathname.includes('/livechat') && msg.role === 'user') {
                         const senderName = msg.customerName || msg.phoneNumber || 'عميل واتساب';
