@@ -71,7 +71,113 @@
         .media-bubble img { max-width: 240px; max-height: 240px; object-fit: cover; border-radius: 8px; cursor: pointer; display: block; transition: transform 0.2s ease; }
         .media-bubble img:hover { transform: scale(1.02); }
         .media-bubble video { max-width: 250px; max-height: 250px; border-radius: 8px; display: block; }
-        .media-bubble audio { max-width: 250px; min-width: 200px; height: 38px; border-radius: 20px; display: block; }
+        .media-bubble audio { max-width: 100%; min-width: 220px; height: 38px; border-radius: 20px; display: block; direction: ltr; }
+
+        /* ── Modern WhatsApp-Style Voice Player ── */
+        .voice-player {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 230px;
+            max-width: 280px;
+            padding: 4px 2px;
+            direction: ltr !important;
+            user-select: none;
+        }
+        .voice-play-btn {
+            width: 44px;
+            height: 44px;
+            min-width: 44px;
+            border-radius: 50%;
+            background: #6366f1;
+            color: #ffffff;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: transform 0.15s ease, background 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            -webkit-tap-highlight-color: transparent;
+        }
+        .voice-play-btn:active {
+            transform: scale(0.92);
+        }
+        .voice-play-btn i {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            margin-left: 2px; /* محاذاة بصرية لمثلث البلاي */
+        }
+        .voice-play-btn i.bi-pause-fill {
+            margin-left: 0;
+        }
+        .bbl-out .voice-play-btn {
+            background: #ffffff;
+            color: #4f46e5;
+        }
+        .bbl-out .voice-play-btn:hover {
+            background: #f8fafc;
+        }
+        .voice-track-wrap {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+        }
+        .voice-seek-bar {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.25);
+            outline: none;
+            cursor: pointer;
+            margin: 0;
+        }
+        .voice-seek-bar::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        }
+        .voice-seek-bar::-moz-range-thumb {
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            border: none;
+        }
+        .bbl-out .voice-seek-bar {
+            background: rgba(255, 255, 255, 0.35);
+        }
+        .voice-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            opacity: 0.85;
+            line-height: 1;
+            font-weight: 500;
+        }
+        .voice-current-time {
+            font-variant-numeric: tabular-nums;
+        }
+        .voice-duration {
+            font-variant-numeric: tabular-nums;
+            opacity: 0.8;
+        }
+
         .media-doc-card { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(255,255,255,0.08); border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); max-width: 240px; text-decoration: none !important; color: inherit !important; }
         .media-doc-card:hover { background: rgba(255,255,255,0.15); }
         .lc-send-bar { padding:10px 14px; background:rgba(15,23,42,.9); border-top:1px solid rgba(255,255,255,.07); display:flex; gap:8px; align-items:flex-end; flex-shrink:0; }
@@ -118,6 +224,13 @@
             }
             .lc-outer.lc-show-chat .lc-contacts {
                 display: none !important;
+            }
+            .lc-bbl {
+                max-width: 86% !important;
+            }
+            .voice-player {
+                min-width: 200px !important;
+                max-width: 100% !important;
             }
         }
     </style>
@@ -254,7 +367,7 @@
                         <button type="button" class="btn btn-link text-white-50 p-1 me-1" onclick="document.getElementById('mediaFileInput').click()" title="إرفاق صورة أو فيديو أو فويس أو مستند" style="font-size:19px; line-height:1; text-decoration:none;">
                             <i class="bi bi-paperclip"></i>
                         </button>
-                        <textarea id="lcIn" placeholder="اكتب ردك... (Enter=إرسال، Shift+Enter=سطر جديد)" rows="1"></textarea>
+                        <textarea id="lcIn" placeholder="اكتب رسالة..." rows="1"></textarea>
                         <button class="btn-ls" onclick="sendMsg()"><i class="bi bi-send-fill"></i></button>
                     </div>
                 </div>
@@ -502,6 +615,88 @@
         if (it) { const u = it.querySelector('.unread-pill'); if (u) u.remove(); }
     }
 
+    let currentlyPlayingAudio = null;
+
+    function formatVoiceTime(seconds) {
+        if (isNaN(seconds) || seconds < 0 || !isFinite(seconds)) return '0:00';
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function initVoiceAudio(audioEl) {
+        const player = audioEl.closest('.voice-player');
+        if (!player) return;
+        const durEl = player.querySelector('.voice-duration');
+        if (durEl && audioEl.duration && !isNaN(audioEl.duration) && isFinite(audioEl.duration)) {
+            durEl.textContent = formatVoiceTime(audioEl.duration);
+        }
+    }
+
+    function toggleVoicePlay(btn) {
+        const player = btn.closest('.voice-player');
+        if (!player) return;
+        const audio = player.querySelector('audio');
+        if (!audio) return;
+
+        if (audio.paused) {
+            // إيقاف أي فويس آخر شغال حالياً لمنع تداخل الأصوات
+            if (currentlyPlayingAudio && currentlyPlayingAudio !== audio) {
+                currentlyPlayingAudio.pause();
+                const otherPlayer = currentlyPlayingAudio.closest('.voice-player');
+                if (otherPlayer) {
+                    const otherBtn = otherPlayer.querySelector('.voice-play-btn i');
+                    if (otherBtn) otherBtn.className = 'bi bi-play-fill';
+                }
+            }
+            audio.play().then(() => {
+                currentlyPlayingAudio = audio;
+                btn.querySelector('i').className = 'bi bi-pause-fill';
+            }).catch(err => {
+                console.error('Audio play error:', err);
+            });
+        } else {
+            audio.pause();
+            btn.querySelector('i').className = 'bi bi-play-fill';
+        }
+    }
+
+    function updateVoiceAudio(audio) {
+        const player = audio.closest('.voice-player');
+        if (!player) return;
+        const curEl = player.querySelector('.voice-current-time');
+        const durEl = player.querySelector('.voice-duration');
+        const seek = player.querySelector('.voice-seek-bar');
+
+        if (curEl) curEl.textContent = formatVoiceTime(audio.currentTime);
+        if (durEl && (!durEl.dataset.set || durEl.textContent === '🎙️ فويس') && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+            durEl.textContent = formatVoiceTime(audio.duration);
+            durEl.dataset.set = 'true';
+        }
+        if (seek && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+            seek.value = (audio.currentTime / audio.duration) * 100;
+        }
+    }
+
+    function onVoiceSeek(rangeInput) {
+        const player = rangeInput.closest('.voice-player');
+        if (!player) return;
+        const audio = player.querySelector('audio');
+        if (!audio || !audio.duration) return;
+        audio.currentTime = (rangeInput.value / 100) * audio.duration;
+    }
+
+    function resetVoiceAudio(audio) {
+        const player = audio.closest('.voice-player');
+        if (!player) return;
+        const btnIcon = player.querySelector('.voice-play-btn i');
+        if (btnIcon) btnIcon.className = 'bi bi-play-fill';
+        const seek = player.querySelector('.voice-seek-bar');
+        if (seek) seek.value = 0;
+        const curEl = player.querySelector('.voice-current-time');
+        if (curEl) curEl.textContent = '0:00';
+    }
+
     function addBbl(txt, isIn, date, mediaUrl) {
         if (!txt && !mediaUrl) return;
         const box = document.getElementById('lcMsgs');
@@ -518,7 +713,21 @@
             const isVideo = ['mp4', 'webm', 'mov'].includes(ext) || (txt && (txt.includes('فيديو') || txt.includes('vid')));
 
             if (isAudio) {
-                contentHtml += `<div class="media-bubble"><audio src="${cleanUrl}" controls preload="metadata"></audio></div>`;
+                contentHtml += `
+                    <div class="voice-player" dir="ltr">
+                        <button type="button" class="voice-play-btn" onclick="toggleVoicePlay(this)" title="تشغيل / إيقاف الفويس">
+                            <i class="bi bi-play-fill"></i>
+                        </button>
+                        <div class="voice-track-wrap">
+                            <input type="range" class="voice-seek-bar" value="0" min="0" max="100" step="1" oninput="onVoiceSeek(this)">
+                            <div class="voice-meta">
+                                <span class="voice-current-time">0:00</span>
+                                <span class="voice-duration">🎙️ فويس</span>
+                            </div>
+                        </div>
+                        <audio src="${cleanUrl}" preload="metadata" onloadedmetadata="initVoiceAudio(this)" ontimeupdate="updateVoiceAudio(this)" onended="resetVoiceAudio(this)"></audio>
+                    </div>
+                `;
             } else if (isImage) {
                 contentHtml += `<div class="media-bubble"><a href="${cleanUrl}" target="_blank" download title="انقر للفتح بالكامل أو التحميل"><img src="${cleanUrl}" alt="صورة" loading="lazy"></a></div>`;
             } else if (isVideo) {
