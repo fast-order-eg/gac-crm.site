@@ -97,13 +97,20 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Global Rate limiter
+// Trust reverse proxy (CyberPanel / OpenLiteSpeed / Nginx)
+app.set('trust proxy', 1);
+
+// Global Rate limiter (سماح أكبر واستثناء لوحة التحكم واللايف شات لمنع حظر فريق العمل)
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200, // limit each IP to 200 requests per windowMs
+    max: 5000, // زيادة الحد لـ 5000 طلب لكل IP حقيقي
     message: "Too many requests from this IP, please try again after 15 minutes",
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => {
+        // استثناء لوحة التحكم واللايف شات والوسائط وفحص الصحة
+        return req.path.startsWith('/dashboard') || req.path.startsWith('/health') || req.path.startsWith('/uploads') || req.path.startsWith('/public');
+    }
 });
 app.use(limiter);
 
