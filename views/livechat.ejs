@@ -63,10 +63,174 @@
         .lc-chat { flex:1; display:flex; flex-direction:column; background:#0b1120; min-width:0; }
         .lc-chat-head { padding:11px 16px; background:rgba(15,23,42,.9); border-bottom:1px solid rgba(255,255,255,.07); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
         .lc-msgs { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
-        .lc-bbl { max-width:68%; padding:9px 14px; border-radius:14px; font-size:13px; line-height:1.6; word-break:break-word; }
+        .lc-bbl { max-width:68%; padding:9px 14px; border-radius:14px; font-size:13px; line-height:1.6; word-break:break-word; position:relative; }
         .bbl-in  { background:#1e293b; color:#cbd5e1; align-self:flex-end; border-bottom-right-radius:3px; }
         .bbl-out { background:linear-gradient(135deg,#4f46e5,#6366f1); color:white; align-self:flex-start; border-bottom-left-radius:3px; }
         .bbl-t { font-size:10px; opacity:.55; margin-top:3px; }
+
+        /* ── WhatsApp Reply & Reactions Styles ── */
+        .bbl-action-group {
+            position: absolute;
+            top: -13px;
+            display: none;
+            align-items: center;
+            gap: 3px;
+            background: #1e293b;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 20px;
+            padding: 2px 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+            z-index: 10;
+        }
+        .bbl-in .bbl-action-group { right: 8px; }
+        .bbl-out .bbl-action-group { left: 8px; }
+        .lc-bbl:hover .bbl-action-group,
+        .lc-bbl.active-actions .bbl-action-group {
+            display: flex;
+        }
+        .bbl-act-btn {
+            width: 25px;
+            height: 25px;
+            border-radius: 50%;
+            border: none;
+            background: transparent;
+            color: #94a3b8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .bbl-act-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: #38bdf8;
+            transform: scale(1.15);
+        }
+
+        /* Quoted / Reply Preview Box inside Bubble */
+        .bbl-quoted {
+            background: rgba(0, 0, 0, 0.28);
+            border-right: 4px solid #25D366;
+            border-radius: 8px;
+            padding: 5px 9px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+            max-width: 100%;
+            text-align: right;
+        }
+        .bbl-out .bbl-quoted {
+            border-right-color: #60a5fa;
+            background: rgba(0, 0, 0, 0.22);
+        }
+        .bbl-quoted:hover {
+            background: rgba(0, 0, 0, 0.42);
+        }
+        .bbl-quoted-sender {
+            font-weight: 700;
+            font-size: 11px;
+            color: #25D366;
+            margin-bottom: 2px;
+        }
+        .bbl-out .bbl-quoted-sender {
+            color: #93c5fd;
+        }
+        .bbl-quoted-text {
+            color: rgba(255, 255, 255, 0.85);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 260px;
+        }
+
+        /* Reaction Badge on Bubble */
+        .bbl-reaction-badge {
+            position: absolute;
+            bottom: -11px;
+            background: #1e293b;
+            border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 14px;
+            padding: 1px 7px;
+            font-size: 13px;
+            line-height: 1.3;
+            display: inline-flex;
+            align-items: center;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+            z-index: 2;
+            user-select: none;
+            transition: transform 0.15s;
+        }
+        .bbl-in .bbl-reaction-badge { left: 8px; }
+        .bbl-out .bbl-reaction-badge { right: 8px; }
+        .bbl-reaction-badge:hover {
+            transform: scale(1.2);
+        }
+
+        /* Highlight animation when jumping to quoted message */
+        @keyframes bblPulse {
+            0% { transform: scale(1); filter: brightness(1); }
+            50% { transform: scale(1.03); filter: brightness(1.3); }
+            100% { transform: scale(1); filter: brightness(1); }
+        }
+        .bbl-highlight {
+            animation: bblPulse 0.8s ease-in-out 2;
+            outline: 2px solid #25D366 !important;
+        }
+
+        /* Floating Reaction Picker Capsule (Exact WhatsApp Style) */
+        .reaction-capsule {
+            position: fixed;
+            z-index: 99999;
+            background: #1e293b;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 36px;
+            padding: 6px 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 12px 28px rgba(0,0,0,0.6), 0 4px 10px rgba(0,0,0,0.4);
+            animation: reactionPop 0.18s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            user-select: none;
+        }
+        @keyframes reactionPop {
+            0% { transform: scale(0.6); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .reaction-emoji-btn {
+            font-size: 24px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            line-height: 1;
+            padding: 2px 4px;
+            border-radius: 50%;
+            transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .reaction-emoji-btn:hover {
+            transform: scale(1.35);
+        }
+
+        /* Reply Preview Bar above Send Box */
+        #replyPreviewBar {
+            display: none;
+            padding: 8px 14px;
+            background: rgba(30, 41, 59, 0.98);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-bottom: none;
+            border-radius: 12px 12px 0 0;
+            margin: 0 8px -1px 8px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            box-shadow: 0 -4px 12px rgba(0,0,0,0.25);
+            border-right: 4px solid #25D366;
+        }
         .media-bubble { max-width: 250px; border-radius: 8px; overflow: hidden; margin-bottom: 5px; }
         .media-bubble img { max-width: 240px; max-height: 240px; object-fit: cover; border-radius: 8px; cursor: pointer; display: block; transition: transform 0.2s ease; }
         .media-bubble img:hover { transform: scale(1.02); }
@@ -344,6 +508,20 @@
                     </div>
                     <div class="lc-msgs" id="lcMsgs"></div>
 
+                    <!-- Quoted Message Reply Preview Bar (WhatsApp Style) -->
+                    <div id="replyPreviewBar">
+                        <div class="d-flex align-items-center gap-2 min-w-0 flex-grow-1">
+                            <i class="bi bi-reply-fill text-success fs-5 flex-shrink-0"></i>
+                            <div class="min-w-0 flex-grow-1">
+                                <div class="fw-bold text-success text-truncate" id="replyPreviewSender" style="font-size:12px;">الرد على</div>
+                                <div class="text-white-50 text-truncate" id="replyPreviewText" style="font-size:11px;">محتوى الرسالة</div>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-link text-white-50 p-0 me-1" onclick="cancelReply()" title="إلغاء الرد" style="font-size:18px; line-height:1; text-decoration:none;">
+                            <i class="bi bi-x-circle-fill text-danger"></i>
+                        </button>
+                    </div>
+
                     <!-- Outgoing Media Attachment Bar -->
                     <div id="mediaAttachmentBar" style="display:none; padding:8px 14px; background:rgba(30,41,59,0.98); border:1px solid rgba(255,255,255,0.12); border-radius:12px 12px 0 0; margin:0 8px -1px 8px; align-items:center; justify-content:space-between; gap:10px; box-shadow:0 -4px 12px rgba(0,0,0,0.25);">
                         <div class="d-flex align-items-center gap-2 min-w-0 flex-grow-1">
@@ -372,6 +550,16 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- WhatsApp-Style Emoji Reaction Capsule Popup -->
+    <div id="reactionPickerCapsule" class="reaction-capsule" style="display:none;">
+        <button type="button" class="reaction-emoji-btn" onclick="applyReaction('👍')" title="إعجاب">👍</button>
+        <button type="button" class="reaction-emoji-btn" onclick="applyReaction('❤️')" title="قلب">❤️</button>
+        <button type="button" class="reaction-emoji-btn" onclick="applyReaction('😂')" title="ضحك">😂</button>
+        <button type="button" class="reaction-emoji-btn" onclick="applyReaction('😮')" title="مندهش">😮</button>
+        <button type="button" class="reaction-emoji-btn" onclick="applyReaction('😢')" title="حزين">😢</button>
+        <button type="button" class="reaction-emoji-btn" onclick="applyReaction('🙏')" title="دعاء / شكراً">🙏</button>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -516,11 +704,50 @@
                         } else {
                             pendingLocalMessages.delete(pendingKey);
                         }
+                        // تحديث الفقاعة المحلية الأخيرة بمعرفها الحقيقي لإتاحة الرد والتفاعل
+                        const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+                        if (unassignedBbl && msg.id) {
+                            unassignedBbl.dataset.mid = msg.id;
+                            if (!unassignedBbl.querySelector('.bbl-action-group')) {
+                                const actDiv = document.createElement('div');
+                                actDiv.className = 'bbl-action-group';
+                                actDiv.innerHTML = `
+                                    <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${msg.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                                    <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${msg.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+                                `;
+                                unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
+                            }
+                        }
                         return;
                     }
                 }
-                addBbl(content, msg.role === 'user', new Date(msg.createdAt), msg.media_url, msg.id);
+                const quotedInfo = msg.quotedContent ? {
+                    id: msg.quotedMsgId,
+                    content: msg.quotedContent,
+                    sender: msg.quotedSender || (msg.role === 'model' ? 'أنت' : 'العميل')
+                } : null;
+                addBbl(content, msg.role === 'user', new Date(msg.createdAt), msg.media_url, msg.id, quotedInfo, msg.reaction);
                 if (msg.role === 'user') playMessageChime();
+            }
+        });
+
+        // استماع فوري لتفاعلات الإيموجي عبر Socket.IO
+        io_.on('message_reaction', data => {
+            if (!curJid) return;
+            const bbl = document.querySelector(`.lc-bbl[data-mid="${data.dbId}"]`) || document.querySelector(`.lc-bbl[data-mid="${data.messageId}"]`);
+            if (bbl) {
+                let badge = bbl.querySelector('.bbl-reaction-badge');
+                if (data.reaction) {
+                    if (!badge) {
+                        badge = document.createElement('div');
+                        badge.className = 'bbl-reaction-badge';
+                        badge.onclick = (ev) => { ev.stopPropagation(); openReactionPicker(ev, data.dbId || data.messageId); };
+                        bbl.appendChild(badge);
+                    }
+                    badge.textContent = data.reaction;
+                } else if (badge) {
+                    badge.remove();
+                }
             }
         });
 
@@ -628,10 +855,20 @@
         updHO(ho);
         const r = await fetch(`/dashboard/livechat/${encodeURIComponent(jid)}/messages`);
         const d = await r.json();
-        const box = document.getElementById('lcMsgs'); box.innerHTML = '';
+        const box = document.getElementById('lcMsgs');
+        box.innerHTML = '';
+        cancelReply();
+        const reactionCapsule = document.getElementById('reactionPickerCapsule');
+        if (reactionCapsule) reactionCapsule.style.display = 'none';
+
         if (d.messages) d.messages.forEach(m => {
             let content = m.content ? m.content.replace(/\[M:\d+\]/g, '').trim() : '';
-            addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url, m.id);
+            const quotedInfo = m.quotedContent ? {
+                id: m.quotedMsgId,
+                content: m.quotedContent,
+                sender: m.quotedSender || (m.role === 'model' ? 'أنت' : 'العميل')
+            } : null;
+            addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url, m.id, quotedInfo, m.reaction);
         });
         box.scrollTop = box.scrollHeight;
         const it = document.querySelector(`.lc-item[data-jid="${jid}"]`);
@@ -720,7 +957,16 @@
         if (curEl) curEl.textContent = '0:00';
     }
 
-    function addBbl(txt, isIn, date, mediaUrl, msgId) {
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function addBbl(txt, isIn, date, mediaUrl, msgId, quotedInfo, reactionEmoji) {
         if (!txt && !mediaUrl) return;
         const box = document.getElementById('lcMsgs');
         const d = document.createElement('div');
@@ -729,6 +975,21 @@
         const t = date ? date.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'}) : '';
 
         let contentHtml = '';
+
+        // 1. صندوق الرسالة المقتبس منها إن وجد (Quoted Preview Box)
+        if (quotedInfo && (quotedInfo.content || quotedInfo.snippet)) {
+            const qSender = quotedInfo.sender || (isIn ? 'أنت' : 'العميل');
+            const qContent = quotedInfo.content || quotedInfo.snippet || '';
+            const targetMid = quotedInfo.id || '';
+            contentHtml += `
+                <div class="bbl-quoted" onclick="scrollToMsg('${targetMid}')" title="انقر للانتقال للرسالة الأصلية">
+                    <div class="bbl-quoted-sender">${escapeHtml(qSender)}</div>
+                    <div class="bbl-quoted-text">${escapeHtml(qContent)}</div>
+                </div>
+            `;
+        }
+
+        // 2. الوسائط
         if (mediaUrl) {
             const cleanUrl = mediaUrl.trim();
             const ext = cleanUrl.split('?')[0].split('.').pop().toLowerCase();
@@ -767,9 +1028,161 @@
             contentHtml += `<div class="msg-text">${txt.replace(/\n/g, '<br>')}</div>`;
         }
 
-        d.innerHTML = `${contentHtml}<div class="bbl-t">${t}</div>`;
+        // 3. أزرار الإجراءات (Reply & React)
+        const actionHtml = msgId ? `
+            <div class="bbl-action-group">
+                <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${msgId}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${msgId}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+            </div>
+        ` : '';
+
+        // 4. بادج التفاعل إن وجد
+        const reactionHtml = reactionEmoji ? `
+            <div class="bbl-reaction-badge" onclick="event.stopPropagation(); openReactionPicker(event, '${msgId}')" title="تغيير أو إلغاء التفاعل">
+                ${reactionEmoji}
+            </div>
+        ` : '';
+
+        d.innerHTML = `${actionHtml}${contentHtml}<div class="bbl-t">${t}</div>${reactionHtml}`;
+
+        // دعم النقر على الفقاعة في الموبايل لإظهار الأزرار
+        d.onclick = function(e) {
+            if (e.target.closest('a, button, input, .voice-play-btn, .voice-seek-bar, .bbl-quoted')) return;
+            const hasActive = d.classList.contains('active-actions');
+            document.querySelectorAll('.lc-bbl.active-actions').forEach(b => b.classList.remove('active-actions'));
+            if (!hasActive && msgId) d.classList.add('active-actions');
+        };
+
         box.appendChild(d);
         box.scrollTop = box.scrollHeight;
+    }
+
+    let activeReplyMsg = null;
+
+    function triggerReply(e, msgId) {
+        if (e) e.stopPropagation();
+        const bbl = document.querySelector(`.lc-bbl[data-mid="${msgId}"]`);
+        if (!bbl) return;
+
+        const isIn = bbl.classList.contains('bbl-in');
+        const contactName = document.querySelector('.lc-chat-head .fw-bold')?.textContent?.trim() || 'العميل';
+        const sender = isIn ? contactName : 'أنت';
+        
+        let snippet = '';
+        const textEl = bbl.querySelector('.msg-text');
+        if (textEl) {
+            snippet = textEl.textContent.trim();
+        } else if (bbl.querySelector('.voice-player')) {
+            snippet = '🎙️ رسالة صوتية';
+        } else if (bbl.querySelector('img')) {
+            snippet = '📷 صورة';
+        } else if (bbl.querySelector('video')) {
+            snippet = '🎥 فيديو';
+        } else if (bbl.querySelector('.media-doc-card')) {
+            snippet = '📄 مستند';
+        } else {
+            snippet = 'رسالة';
+        }
+
+        activeReplyMsg = {
+            id: msgId,
+            sender: sender,
+            snippet: snippet
+        };
+
+        const bar = document.getElementById('replyPreviewBar');
+        const senderEl = document.getElementById('replyPreviewSender');
+        const textElPreview = document.getElementById('replyPreviewText');
+        if (bar && senderEl && textElPreview) {
+            senderEl.textContent = `الرد على ${sender}`;
+            textElPreview.textContent = snippet;
+            bar.style.display = 'flex';
+        }
+
+        const inp = document.getElementById('lcIn');
+        if (inp) inp.focus();
+    }
+
+    function cancelReply() {
+        activeReplyMsg = null;
+        const bar = document.getElementById('replyPreviewBar');
+        if (bar) bar.style.display = 'none';
+    }
+
+    function scrollToMsg(targetMid) {
+        if (!targetMid) return;
+        const targetBbl = document.querySelector(`.lc-bbl[data-mid="${targetMid}"]`);
+        if (targetBbl) {
+            targetBbl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetBbl.classList.add('bbl-highlight');
+            setTimeout(() => targetBbl.classList.remove('bbl-highlight'), 1600);
+        }
+    }
+
+    let activeReactionMsgId = null;
+
+    function openReactionPicker(e, msgId) {
+        if (e) e.stopPropagation();
+        activeReactionMsgId = msgId;
+        const capsule = document.getElementById('reactionPickerCapsule');
+        if (!capsule) return;
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const capsuleWidth = 270;
+        const capsuleHeight = 48;
+
+        let left = rect.left + (rect.width / 2) - (capsuleWidth / 2);
+        let top = rect.top - capsuleHeight - 10;
+
+        if (left < 10) left = 10;
+        if (left + capsuleWidth > window.innerWidth - 10) left = window.innerWidth - capsuleWidth - 10;
+        if (top < 10) top = rect.bottom + 10;
+
+        capsule.style.left = `${left}px`;
+        capsule.style.top = `${top}px`;
+        capsule.style.display = 'flex';
+    }
+
+    async function applyReaction(emoji) {
+        const msgId = activeReactionMsgId;
+        const capsule = document.getElementById('reactionPickerCapsule');
+        if (capsule) capsule.style.display = 'none';
+        if (!msgId || !curJid) return;
+
+        const bbl = document.querySelector(`.lc-bbl[data-mid="${msgId}"]`);
+        const currentBadge = bbl?.querySelector('.bbl-reaction-badge');
+        const isSame = currentBadge && currentBadge.textContent.trim() === emoji;
+        const emojiToSend = isSame ? '' : emoji;
+
+        // تحديث محلي تفاؤلي سريع
+        if (bbl) {
+            if (emojiToSend) {
+                let badge = bbl.querySelector('.bbl-reaction-badge');
+                if (!badge) {
+                    badge = document.createElement('div');
+                    badge.className = 'bbl-reaction-badge';
+                    badge.onclick = (ev) => { ev.stopPropagation(); openReactionPicker(ev, msgId); };
+                    bbl.appendChild(badge);
+                }
+                badge.textContent = emojiToSend;
+            } else if (currentBadge) {
+                currentBadge.remove();
+            }
+        }
+
+        try {
+            await fetch('/dashboard/livechat/react', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    remoteJid: curJid,
+                    messageId: msgId,
+                    emoji: emojiToSend
+                })
+            });
+        } catch (err) {
+            console.error('Error applying reaction:', err);
+        }
     }
 
     let selectedMediaFile = null;
@@ -834,6 +1247,8 @@
         if (selectedMediaFile) {
             const mediaToUpload = selectedMediaFile;
             const captionText = txt;
+            const replyToSend = activeReplyMsg;
+            cancelReply();
             cancelMediaPreview();
             inp.value = '';
             inp.style.height = 'auto';
@@ -843,17 +1258,23 @@
                 sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
             }
 
-            // عرض فقاعة مبدئية محلية
+            // عرض فقاعة مبدئية محلية مع المقتبس إن وجد
             let localUrl = null;
             if (mediaToUpload.type.startsWith('image/') || mediaToUpload.type.startsWith('video/') || mediaToUpload.type.startsWith('audio/')) {
                 try { localUrl = URL.createObjectURL(mediaToUpload); } catch(e){}
             }
-            addBbl(captionText || 'مرفق وسائط', false, new Date(), localUrl);
+            const localQuoted = replyToSend ? {
+                id: replyToSend.id,
+                sender: replyToSend.sender,
+                content: replyToSend.snippet
+            } : null;
+            addBbl(captionText || 'مرفق وسائط', false, new Date(), localUrl, null, localQuoted, null);
 
             const formData = new FormData();
             formData.append('remoteJid', curJid);
             formData.append('mediaFile', mediaToUpload);
             if (captionText) formData.append('caption', captionText);
+            if (replyToSend) formData.append('quotedMsgId', replyToSend.id);
 
             try {
                 const res = await fetch('/dashboard/livechat/send-media', {
@@ -889,12 +1310,19 @@
             return;
         }
 
-        // 2. إرسال رسالة نصية عادية
+        // 2. إرسال رسالة نصية عادية مع المقتبس إن وجد
+        const replyToSend = activeReplyMsg;
+        cancelReply();
         inp.value = '';
         inp.style.height = 'auto';
         inp.focus();
 
-        addBbl(txt, false, new Date());
+        const localQuoted = replyToSend ? {
+            id: replyToSend.id,
+            sender: replyToSend.sender,
+            content: replyToSend.snippet
+        } : null;
+        addBbl(txt, false, new Date(), null, null, localQuoted, null);
 
         const curCount = pendingLocalMessages.get(txt) || 0;
         pendingLocalMessages.set(txt, curCount + 1);
@@ -908,7 +1336,11 @@
             const r = await fetch('/dashboard/livechat/send', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({remoteJid: curJid, text: txt})
+                body: JSON.stringify({
+                    remoteJid: curJid,
+                    text: txt,
+                    quotedMsgId: replyToSend ? replyToSend.id : undefined
+                })
             });
             const d = await r.json();
             if (!d.success) {
@@ -944,10 +1376,32 @@
                         d.messages.forEach(m => {
                             if (!existingMids.has(String(m.id))) {
                                 let content = m.content ? m.content.replace(/\[M:\d+\]/g, '').trim() : '';
-                                addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url, m.id);
+                                const quotedInfo = m.quotedContent ? {
+                                    id: m.quotedMsgId,
+                                    content: m.quotedContent,
+                                    sender: m.quotedSender || (m.role === 'model' ? 'أنت' : 'العميل')
+                                } : null;
+                                addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url, m.id, quotedInfo, m.reaction);
                                 existingMids.add(String(m.id));
                                 hasNew = true;
                                 if (m.role === 'user') playMessageChime();
+                            } else {
+                                // مزامنة بادج التفاعل إن وجد في التحديث
+                                const bbl = document.querySelector(`.lc-bbl[data-mid="${m.id}"]`);
+                                if (bbl) {
+                                    let badge = bbl.querySelector('.bbl-reaction-badge');
+                                    if (m.reaction) {
+                                        if (!badge) {
+                                            badge = document.createElement('div');
+                                            badge.className = 'bbl-reaction-badge';
+                                            badge.onclick = (ev) => { ev.stopPropagation(); openReactionPicker(ev, m.id); };
+                                            bbl.appendChild(badge);
+                                        }
+                                        if (badge.textContent.trim() !== m.reaction) badge.textContent = m.reaction;
+                                    } else if (badge) {
+                                        badge.remove();
+                                    }
+                                }
                             }
                         });
                         if (hasNew) {
@@ -971,6 +1425,23 @@
             isSyncing = false;
         }
     }
+
+    // إغلاق كبسولة التفاعلات عند النقر في أي مكان آخر أو ضغط Escape
+    document.addEventListener('click', function(e) {
+        const capsule = document.getElementById('reactionPickerCapsule');
+        if (capsule && capsule.style.display !== 'none' && !capsule.contains(e.target) && !e.target.closest('.bbl-act-btn') && !e.target.closest('.bbl-reaction-badge')) {
+            capsule.style.display = 'none';
+            activeReactionMsgId = null;
+        }
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            cancelReply();
+            const capsule = document.getElementById('reactionPickerCapsule');
+            if (capsule) capsule.style.display = 'none';
+        }
+    });
 
     function updateContactsListFromData(conversations) {
         const listContainer = document.querySelector('.lc-contacts-list');

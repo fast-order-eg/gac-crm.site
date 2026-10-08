@@ -43,6 +43,22 @@ const Message = sequelize.define('Message', {
             model: 'Campaigns',
             key: 'id'
         }
+    },
+    quotedMsgId: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    quotedContent: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
+    quotedSender: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    reaction: {
+        type: DataTypes.STRING(50),
+        allowNull: true
     }
 }, {
     tableName: 'messages',

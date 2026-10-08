@@ -457,7 +457,31 @@ async function extractMessageDetails(msg, userId, sock) {
         }
     }
 
-    return { text, mediaUrl, messageType };
+    // استخراج معلومات الرد على رسالة سابقة إن وجدت (Quoted / ContextInfo)
+    const contextInfo = messageObj[messageType]?.contextInfo || msg.message?.extendedTextMessage?.contextInfo || msg.message?.imageMessage?.contextInfo || msg.message?.videoMessage?.contextInfo || msg.message?.audioMessage?.contextInfo || msg.message?.documentMessage?.contextInfo;
+    let quotedDetails = null;
+    if (contextInfo && contextInfo.stanzaId) {
+        const quotedStanzaId = contextInfo.stanzaId;
+        let qMsg = contextInfo.quotedMessage;
+        let qContent = '';
+        if (qMsg) {
+            let innerType = Object.keys(qMsg)[0];
+            while (['ephemeralMessage', 'viewOnceMessage', 'viewOnceMessageV2', 'documentWithCaptionMessage'].includes(innerType)) {
+                if (qMsg[innerType]?.message) {
+                    qMsg = qMsg[innerType].message;
+                    innerType = Object.keys(qMsg)[0];
+                } else break;
+            }
+            qContent = qMsg.conversation || qMsg.extendedTextMessage?.text || (qMsg.imageMessage ? (qMsg.imageMessage.caption ? `📷 ${qMsg.imageMessage.caption}` : '📷 صورة') : (qMsg.audioMessage ? '🎙️ رسالة صوتية' : (qMsg.videoMessage ? (qMsg.videoMessage.caption ? `🎥 ${qMsg.videoMessage.caption}` : '🎥 فيديو') : (qMsg.documentMessage ? `📄 ${qMsg.documentMessage.fileName || 'مستند'}` : 'مرفق'))));
+        }
+        quotedDetails = {
+            stanzaId: quotedStanzaId,
+            participant: contextInfo.participant,
+            content: qContent || 'رسالة'
+        };
+    }
+
+    return { text, mediaUrl, messageType, quotedDetails };
 }
 
 async function callVertexAI(remoteJid, userText, mediaBuffer = null, mediaMime = null, userId) {
@@ -1790,6 +1814,30 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 continue;
             }
 
+            // فحص هل الرسالة تفاعل إيموجي صادر من الهاتف
+            const fromMeReaction = msg.message?.reactionMessage;
+            if (fromMeReaction && fromMeReaction.key) {
+                const targetKeyId = fromMeReaction.key.id;
+                const emojiText = fromMeReaction.text || null;
+                console.log(`❤️ [FromMe Reaction] استلام تفاعل من الهاتف "${emojiText || 'إلغاء'}" للرسالة ${targetKeyId}`);
+                const targetDbMsg = await Message.findOne({ where: { messageId: targetKeyId } });
+                if (targetDbMsg) {
+                    targetDbMsg.reaction = emojiText;
+                    await targetDbMsg.save();
+                    if (io) {
+                        const reactionPayload = {
+                            dbId: targetDbMsg.id,
+                            messageId: targetKeyId,
+                            remoteJid: targetDbMsg.remoteJid,
+                            reaction: emojiText
+                        };
+                        io.to(`user_${userId}`).emit('message_reaction', reactionPayload);
+                        io.to('crm_staff').emit('message_reaction', reactionPayload);
+                    }
+                }
+                continue;
+            }
+
             // فحص هل الرسالة مرسلة من نظامنا الداخلي (البوت أو لوحة التحكم) لتجنب التكرار
             if (msg.key.id && recentSystemMsgIds.has(msg.key.id)) {
                 continue;
@@ -1817,7 +1865,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 );
 
                 // 2. استخراج النص والوسائط (فويس، صورة، فيديو، مستند، ملصق) وتنزيلها
-                const { text: fromMeText, mediaUrl: fromMeMediaUrl } = await extractMessageDetails(msg, userId, sock);
+                const { text: fromMeText, mediaUrl: fromMeMediaUrl, quotedDetails } = await extractMessageDetails(msg, userId, sock);
                 if (!fromMeText && !fromMeMediaUrl) continue;
 
                 // 3. جلب أو ربط المحادثة وسجل العميل
@@ -1838,6 +1886,22 @@ export const startSession = async (userId, io, phoneNumber = null) => {
 
                 const targetJid = conv ? conv.remoteJid : remoteJid;
 
+                // استخراج الرسالة المقتبس منها إن وجدت
+                let quotedMsgId = null;
+                let quotedContent = null;
+                let quotedSender = null;
+                if (quotedDetails && quotedDetails.stanzaId) {
+                    const parentMsg = await Message.findOne({ where: { messageId: quotedDetails.stanzaId } });
+                    if (parentMsg) {
+                        quotedMsgId = parentMsg.id;
+                        quotedContent = parentMsg.content || quotedDetails.content;
+                        quotedSender = parentMsg.role === 'model' ? 'أنت' : 'العميل';
+                    } else {
+                        quotedContent = quotedDetails.content;
+                        quotedSender = 'العميل';
+                    }
+                }
+
                 // 4. حفظ الرسالة في قاعدة البيانات كـ model (صادرة من الفريق)
                 const savedMsg = await Message.create({
                     UserId: userId,
@@ -1846,6 +1910,9 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     content: fromMeText || 'رسالة',
                     media_url: fromMeMediaUrl || null,
                     messageId: msg.key.id || null,
+                    quotedMsgId,
+                    quotedContent,
+                    quotedSender,
                     status: 'sent',
                     createdAt: msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000) : new Date()
                 });
@@ -1943,8 +2010,32 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         if (remoteJid === 'status@broadcast') return;
         if (msg.key.remoteJid === 'status@broadcast') return;
 
+        // === Reaction Message Handling (تفاعل الإيموجي من العميل أو الفريق) ===
+        const reactionMsg = msg.message?.reactionMessage;
+        if (reactionMsg && reactionMsg.key) {
+            const targetKeyId = reactionMsg.key.id;
+            const emojiText = reactionMsg.text || null;
+            console.log(`❤️ [Reaction] استلام تفاعل "${emojiText || 'إلغاء'}" للرسالة ${targetKeyId} من ${remoteJid}`);
+            const targetDbMsg = await Message.findOne({ where: { messageId: targetKeyId } });
+            if (targetDbMsg) {
+                targetDbMsg.reaction = emojiText;
+                await targetDbMsg.save();
+                if (io) {
+                    const reactionPayload = {
+                        dbId: targetDbMsg.id,
+                        messageId: targetKeyId,
+                        remoteJid,
+                        reaction: emojiText
+                    };
+                    io.to(`user_${userId}`).emit('message_reaction', reactionPayload);
+                    io.to('crm_staff').emit('message_reaction', reactionPayload);
+                }
+            }
+            return;
+        }
+
         // استخراج النص ومرفقات الوسائط للرسالة الواردة باستخدام الدالة الموحدة
-        const { text: incomingText, mediaUrl: incomingMediaUrl, messageType } = await extractMessageDetails(msg, userId, sock);
+        const { text: incomingText, mediaUrl: incomingMediaUrl, messageType, quotedDetails } = await extractMessageDetails(msg, userId, sock);
         let text = incomingText;
 
         // === Interactive Buttons Logic (Check button responses + triggers) ===
@@ -1957,7 +2048,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 // Save selection as user message
                 const button = await InteractiveButton.findOne({ where: { buttonId: selectedId, UserId: userId, isActive: true } });
                 const selectionText = button ? button.label : selectedId;
-                const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: selectionText });
+                const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: selectionText, messageId: msg.key?.id || null });
                 io.to(`user_${userId}`).emit('new_message', savedSel);
 
                 await handleButtonResponse(sock, remoteJid, selectedId, userId, io, phoneNumber);
@@ -1977,7 +2068,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         console.log(`🔘 [Buttons] Customer ${remoteJid} selected interactive: ${selectedId}`);
                         const button = await InteractiveButton.findOne({ where: { buttonId: selectedId, UserId: userId, isActive: true } });
                         const selectionText = button ? button.label : selectedId;
-                        const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: selectionText });
+                        const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: selectionText, messageId: msg.key?.id || null });
                         io.to(`user_${userId}`).emit('new_message', savedSel);
 
                         await handleButtonResponse(sock, remoteJid, selectedId, userId, io, phoneNumber);
@@ -2015,7 +2106,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         const selectedBtn = buttons[userChoice - 1];
                         console.log(`🔘 [Text Menu] Customer ${remoteJid} selected: ${selectedBtn.buttonId} by typing number ${userChoice}`);
                         
-                        const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: text });
+                        const savedSel = await Message.create({ UserId: userId, remoteJid, role: 'user', content: text, messageId: msg.key?.id || null });
                         io.to(`user_${userId}`).emit('new_message', savedSel);
 
                         await handleButtonResponse(sock, remoteJid, selectedBtn.buttonId, userId, io, phoneNumber);
@@ -2037,12 +2128,33 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 else if (messageType === 'videoMessage') msgContent = '🎥 فيديو';
                 else msgContent = '📄 مستند';
             }
+
+            // استخراج تفاصيل الرسالة المقتبس منها إن وجدت للردود الواردة
+            let quotedMsgId = null;
+            let quotedContent = null;
+            let quotedSender = null;
+            if (quotedDetails && quotedDetails.stanzaId) {
+                const parentMsg = await Message.findOne({ where: { messageId: quotedDetails.stanzaId } });
+                if (parentMsg) {
+                    quotedMsgId = parentMsg.id;
+                    quotedContent = parentMsg.content || quotedDetails.content;
+                    quotedSender = parentMsg.role === 'model' ? 'أنت' : 'العميل';
+                } else {
+                    quotedContent = quotedDetails.content;
+                    quotedSender = 'أنت';
+                }
+            }
+
             savedMsg = await Message.create({
                 UserId: userId,
                 remoteJid,
                 role: 'user',
                 content: msgContent,
-                media_url: incomingMediaUrl || null
+                media_url: incomingMediaUrl || null,
+                messageId: msg.key?.id || null,
+                quotedMsgId,
+                quotedContent,
+                quotedSender
             });
             if (io) {
                 const msgPayload = {
@@ -3876,7 +3988,7 @@ export async function teachBot(userId, userText) {
 // ============================================================
 // 🛡️ Live Chat & Human Handoff Method (Direct & Instant for Human Staff)
 // ============================================================
-export async function sendManualMessage(userId, remoteJid, text) {
+export async function sendManualMessage(userId, remoteJid, text, options = {}) {
     const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
     if (!sock) throw new Error("البوت غير متصل حالياً.");
     
@@ -3893,10 +4005,31 @@ export async function sendManualMessage(userId, remoteJid, text) {
         await sock.sendPresenceUpdate('composing', remoteJid);
     } catch (pErr) {}
 
-    // 3. إرسال فوري ومباشر إلى واتساب بالنص الطبيعي الصافي
-    const sentMsg = await sock.sendMessage(remoteJid, { text });
+    // 3. تجهيز الرد المقتبس إن وجد (Quoted Reply)
+    let quotedMsg = null;
+    let quoteOptions = undefined;
+    if (options && options.quotedMsgId) {
+        quotedMsg = await Message.findByPk(options.quotedMsgId);
+        if (quotedMsg && quotedMsg.messageId) {
+            quoteOptions = {
+                quoted: {
+                    key: {
+                        remoteJid: quotedMsg.remoteJid || remoteJid,
+                        fromMe: quotedMsg.role === 'model',
+                        id: quotedMsg.messageId
+                    },
+                    message: {
+                        conversation: quotedMsg.content || 'مرفق'
+                    }
+                }
+            };
+        }
+    }
 
-    // 4. تسجيل معرّف الرسالة فوراً في recentSystemMsgIds لمنع التكرار ومعالجتها كرسالة واردة
+    // 4. إرسال فوري ومباشر إلى واتساب بالنص الطبيعي الصافي
+    const sentMsg = await sock.sendMessage(remoteJid, { text }, quoteOptions || {});
+
+    // 5. تسجيل معرّف الرسالة فوراً في recentSystemMsgIds لمنع التكرار ومعالجتها كرسالة واردة
     if (sentMsg?.key?.id) {
         recentSystemMsgIds.add(sentMsg.key.id);
         setTimeout(() => {
@@ -3904,22 +4037,25 @@ export async function sendManualMessage(userId, remoteJid, text) {
         }, 120000);
     }
 
-    // 5. إيقاف حالة الكتابة
+    // 6. إيقاف حالة الكتابة
     try {
         await sock.sendPresenceUpdate('paused', remoteJid);
     } catch (e) {}
 
-    // 6. حفظ الرسالة في قاعدة البيانات مع معرّفها
+    // 7. حفظ الرسالة في قاعدة البيانات مع معرّفها ومعلومات الرد
     const savedMsg = await Message.create({
         UserId: userId,
         remoteJid,
         role: 'model',
         content: text,
         messageId: sentMsg?.key?.id || null,
+        quotedMsgId: quotedMsg ? quotedMsg.id : null,
+        quotedContent: quotedMsg ? (quotedMsg.content || (quotedMsg.media_url ? 'مرفق' : '')) : null,
+        quotedSender: quotedMsg ? (quotedMsg.role === 'model' ? 'أنت' : 'العميل') : null,
         status: 'sent'
     });
     
-    // 7. تحديث المحادثة
+    // 8. تحديث المحادثة
     await Conversation.update(
         { lastMessageText: text, lastMessageAt: new Date() },
         { where: { UserId: userId, remoteJid } }
@@ -3928,7 +4064,7 @@ export async function sendManualMessage(userId, remoteJid, text) {
     return savedMsg;
 }
 
-export async function sendManualMediaMessage(userId, remoteJid, filePath, mimetype, caption = '') {
+export async function sendManualMediaMessage(userId, remoteJid, filePath, mimetype, caption = '', options = {}) {
     const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
     if (!sock) throw new Error("البوت غير متصل حالياً.");
 
@@ -3956,6 +4092,27 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
         logText = caption ? `📄 مستند: ${caption} (${fileName})` : `📄 مستند: ${fileName}`;
     }
 
+    // تجهيز الرد المقتبس إن وجد (Quoted Reply)
+    let quotedMsg = null;
+    let quoteOptions = undefined;
+    if (options && options.quotedMsgId) {
+        quotedMsg = await Message.findByPk(options.quotedMsgId);
+        if (quotedMsg && quotedMsg.messageId) {
+            quoteOptions = {
+                quoted: {
+                    key: {
+                        remoteJid: quotedMsg.remoteJid || remoteJid,
+                        fromMe: quotedMsg.role === 'model',
+                        id: quotedMsg.messageId
+                    },
+                    message: {
+                        conversation: quotedMsg.content || 'مرفق'
+                    }
+                }
+            };
+        }
+    }
+
     // إشارة للحالة (recording / composing)
     const presence = isAudio ? 'recording' : 'composing';
     try {
@@ -3966,14 +4123,14 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
     let sentMsg;
     let finalRemoteJid = remoteJid;
     try {
-        sentMsg = await sock.sendMessage(remoteJid, messageContent);
+        sentMsg = await sock.sendMessage(remoteJid, messageContent, quoteOptions || {});
     } catch (primaryErr) {
         if (remoteJid && remoteJid.endsWith('@lid')) {
             const phone = lidPhoneMap.get(remoteJid) || (await Customer.findOne({ where: { remoteJid } }))?.phoneNumber;
             if (phone) {
                 const phoneJid = `${phone}@s.whatsapp.net`;
                 console.log(`⚠️ فشل إرسال الوسائط إلى LID ${remoteJid} (${primaryErr.message})، جاري المحاولة على رقم الهاتف: ${phoneJid}`);
-                sentMsg = await sock.sendMessage(phoneJid, messageContent);
+                sentMsg = await sock.sendMessage(phoneJid, messageContent, quoteOptions || {});
                 finalRemoteJid = phoneJid;
             } else {
                 throw primaryErr;
@@ -4007,6 +4164,9 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
         content: logText,
         media_url: relativeUrl,
         messageId: sentMsg?.key?.id || null,
+        quotedMsgId: quotedMsg ? quotedMsg.id : null,
+        quotedContent: quotedMsg ? (quotedMsg.content || (quotedMsg.media_url ? 'مرفق' : '')) : null,
+        quotedSender: quotedMsg ? (quotedMsg.role === 'model' ? 'أنت' : 'العميل') : null,
         status: 'sent'
     });
 
@@ -4019,6 +4179,61 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
     );
 
     return savedMsg;
+}
+
+export async function sendReaction(userId, remoteJid, messageIdentifier, emoji) {
+    const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
+    if (!sock) throw new Error("البوت غير متصل حالياً.");
+
+    let targetMsg = null;
+    if (!isNaN(messageIdentifier)) {
+        targetMsg = await Message.findByPk(messageIdentifier);
+    }
+    if (!targetMsg) {
+        targetMsg = await Message.findOne({ where: { messageId: String(messageIdentifier) } });
+    }
+
+    if (!targetMsg || !targetMsg.messageId) {
+        throw new Error("لم يتم العثور على الرسالة المراد التفاعل معها أو ليس لها معرّف واتساب.");
+    }
+
+    const reactionText = emoji || "";
+    const reactionMessage = {
+        react: {
+            text: reactionText,
+            key: {
+                remoteJid: targetMsg.remoteJid || remoteJid,
+                fromMe: targetMsg.role === 'model',
+                id: targetMsg.messageId
+            }
+        }
+    };
+
+    try {
+        await sock.sendMessage(remoteJid, reactionMessage);
+    } catch (primaryErr) {
+        if (remoteJid && remoteJid.endsWith('@lid')) {
+            const phone = lidPhoneMap.get(remoteJid) || (await Customer.findOne({ where: { remoteJid } }))?.phoneNumber;
+            if (phone) {
+                const phoneJid = `${phone}@s.whatsapp.net`;
+                await sock.sendMessage(phoneJid, reactionMessage);
+            } else {
+                throw primaryErr;
+            }
+        } else {
+            throw primaryErr;
+        }
+    }
+
+    targetMsg.reaction = reactionText || null;
+    await targetMsg.save();
+
+    return {
+        dbId: targetMsg.id,
+        messageId: targetMsg.messageId,
+        remoteJid: targetMsg.remoteJid,
+        reaction: targetMsg.reaction
+    };
 }
 
 export async function notifyControlGroup(userId, message) {

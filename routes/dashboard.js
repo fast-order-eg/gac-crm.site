@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
-import { startSession, stopSession, logoutSession, getStatus, getGroups, sendManualMessage, sendManualMediaMessage, generateCustomerSummary, checkGacCrmGroup } from '../controllers/botController.js';
+import { startSession, stopSession, logoutSession, getStatus, getGroups, sendManualMessage, sendManualMediaMessage, generateCustomerSummary, checkGacCrmGroup, sendReaction } from '../controllers/botController.js';
 import User from '../models/User.js';
 import Message from '../models/Message.js';
 import Customer from '../models/Customer.js';
@@ -1000,7 +1000,7 @@ const recentManualSendCache = new Map();
 
 router.post('/livechat/send', async (req, res) => {
     try {
-        const { remoteJid, text } = req.body;
+        const { remoteJid, text, quotedMsgId } = req.body;
         if (!remoteJid || !text) return res.status(400).json({ error: 'remoteJid and text required' });
         
         // منع التكرار على السيرفر في حال إرسال نقرتين متتاليتين
@@ -1029,8 +1029,8 @@ router.post('/livechat/send', async (req, res) => {
             return res.status(404).json({ error: 'العميل غير موجود' });
         }
 
-        // إرسال الرسالة باستخدام معرف مالك الجلسة
-        const savedMsg = await sendManualMessage(customer.UserId, remoteJid, text);
+        // إرسال الرسالة باستخدام معرف مالك الجلسة مع خيار الرد المقتبس
+        const savedMsg = await sendManualMessage(customer.UserId, remoteJid, text, { quotedMsgId });
         
         const io = req.app.get('socketio');
         if (io) {
@@ -1087,7 +1087,7 @@ router.post('/livechat/send-media', (req, res, next) => {
     });
 }, async (req, res) => {
     try {
-        const { remoteJid, caption } = req.body;
+        const { remoteJid, caption, quotedMsgId } = req.body;
         if (!remoteJid) return res.status(400).json({ error: 'remoteJid required' });
         if (!req.file) return res.status(400).json({ error: 'لم يتم إرفاق أي ملف' });
 
@@ -1116,7 +1116,8 @@ router.post('/livechat/send-media', (req, res, next) => {
             remoteJid,
             req.file.path,
             req.file.mimetype,
-            caption || ''
+            caption || '',
+            { quotedMsgId }
         );
 
         const io = req.app.get('socketio');
@@ -1143,6 +1144,45 @@ router.post('/livechat/send-media', (req, res, next) => {
     } catch (err) {
         console.error('SendMedia error:', err);
         res.status(500).json({ error: err.message || 'فشل إرسال الوسائط' });
+    }
+});
+
+// تفاعل الإيموجي مع رسالة معينة في اللايف شات
+router.post('/livechat/react', async (req, res) => {
+    try {
+        const { remoteJid, messageId, emoji } = req.body;
+        if (!remoteJid || !messageId) {
+            return res.status(400).json({ error: 'remoteJid and messageId required' });
+        }
+
+        let customer = await Customer.findOne({ where: { remoteJid } });
+        if (!customer && remoteJid.includes('@')) {
+            const phone = remoteJid.split('@')[0];
+            customer = await Customer.findOne({ where: { phoneNumber: phone } });
+        }
+        let conv = await Conversation.findOne({ where: { remoteJid } });
+        if (!customer && conv && conv.CustomerId) {
+            customer = await Customer.findByPk(conv.CustomerId);
+        }
+
+        let botUserId = customer?.UserId || conv?.UserId || req.user.id;
+        if (req.user.role === 'sales' && !customer?.UserId && !conv?.UserId) {
+            const adminUser = await User.findOne({ where: { role: 'admin' } });
+            if (adminUser) botUserId = adminUser.id;
+        }
+
+        const reactionResult = await sendReaction(botUserId, remoteJid, messageId, emoji);
+
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${botUserId}`).emit('message_reaction', reactionResult);
+            io.to('crm_staff').emit('message_reaction', reactionResult);
+        }
+
+        res.json({ success: true, ...reactionResult });
+    } catch (err) {
+        console.error('Reaction error in /livechat/react:', err);
+        res.status(500).json({ error: err.message || 'فشل تحديث التفاعل' });
     }
 });
 
