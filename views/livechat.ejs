@@ -231,6 +231,29 @@
             box-shadow: 0 -4px 12px rgba(0,0,0,0.25);
             border-right: 4px solid #25D366;
         }
+
+        /* ── WhatsApp-Style Chat Date Dividers (فواصل الأيام داخل الشات) ── */
+        .lc-date-divider {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 16px 0 12px 0;
+            width: 100%;
+            pointer-events: none;
+            user-select: none;
+        }
+        .lc-date-divider span {
+            background: rgba(30, 41, 59, 0.88);
+            color: #cbd5e1;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 14px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+            letter-spacing: 0.2px;
+        }
+
         .media-bubble { max-width: 250px; border-radius: 8px; overflow: hidden; margin-bottom: 5px; }
         .media-bubble img { max-width: 240px; max-height: 240px; object-fit: cover; border-radius: 8px; cursor: pointer; display: block; transition: transform 0.2s ease; }
         .media-bubble img:hover { transform: scale(1.02); filter: brightness(1.05); }
@@ -476,13 +499,16 @@
                         const phoneFromJid = (!isLid && c.remoteJid.endsWith('@s.whatsapp.net')) ? c.remoteJid.split('@')[0] : '';
                         const phone = c.phoneNumber || phoneFromJid;
                         const nm = c.customerName || phone || (isLid ? 'عميل' : c.remoteJid.split('@')[0]);
-                        const ts = new Date(c.lastMessageAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'});
+                        const ts = typeof formatChatTime === 'function' ? formatChatTime(c.lastMessageAt) : '';
+                        const lastAtMs = new Date(c.lastMessageAt || 0).getTime();
                     %>
                     <div class="lc-item"
                          data-jid="<%= c.remoteJid %>"
                          data-handoff="<%= c.is_handoff %>"
                          data-name="<%= nm.replace(/"/g,'') %>"
                          data-phone="<%= phone %>"
+                         data-last-at="<%= lastAtMs %>"
+                         data-customer-id="<%= c.CustomerId || '' %>"
                          onclick="loadChat('<%= c.remoteJid %>','<%= nm.replace(/'/g,'') %>',<%= c.is_handoff %>,'<%= phone %>')">
                         <div class="lc-av <%= c.is_handoff ? 'handoff-av' : '' %>">
                             <%= nm[0].toUpperCase() %>
@@ -612,6 +638,115 @@
     let curJid = null, curHO = false, curPhone = null;
     let isSendingMsg = false;
     const pendingLocalMessages = new Map();
+    const serverAutoOpen = <%- JSON.stringify(autoOpen || null) %>;
+
+    // دالة تنسيق الوقت والتاريخ الذكية لقائمة المحادثات (اليوم بالوقت، أمس، اسم اليوم، أو التاريخ)
+    function formatChatTime(dateInput) {
+        if (!dateInput) return '';
+        const date = new Date(dateInput);
+        if (isNaN(date.getTime())) return '';
+
+        const now = new Date();
+        const getCairoDayStart = (d) => {
+            const str = d.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+            const parts = str.split('-');
+            return new Date(parts[0], parts[1] - 1, parts[2]);
+        };
+
+        const todayStart = getCairoDayStart(now);
+        const msgStart = getCairoDayStart(date);
+        const diffDays = Math.round((todayStart - msgStart) / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 0) {
+            const rawTime = date.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+                timeZone: 'Africa/Cairo'
+            });
+            return rawTime.replace('AM', 'ص').replace('PM', 'م');
+        } else if (diffDays === 1) {
+            return 'أمس';
+        } else if (diffDays === 2) {
+            return 'منذ يومين';
+        } else if (diffDays > 2 && diffDays < 7) {
+            return date.toLocaleDateString('ar-EG', { weekday: 'long', timeZone: 'Africa/Cairo' });
+        } else {
+            const dNum = String(date.getDate()).padStart(2, '0');
+            const mNum = String(date.getMonth() + 1).padStart(2, '0');
+            const yNum = date.getFullYear();
+            return `${dNum}/${mNum}/${yNum}`;
+        }
+    }
+
+    // دالة الحصول على مفتاح اليوم للمقارنة (YYYY-MM-DD)
+    function getDateHeaderKey(dateInput) {
+        if (!dateInput) return '';
+        const date = new Date(dateInput);
+        if (isNaN(date.getTime())) return '';
+        return date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+    }
+
+    // دالة تسمية فاصل الأيام في الشات (اليوم، أمس، اسم اليوم مع التاريخ)
+    function getDateHeaderLabel(dateInput) {
+        if (!dateInput) return '';
+        const date = new Date(dateInput);
+        if (isNaN(date.getTime())) return '';
+
+        const now = new Date();
+        const getCairoDayStart = (d) => {
+            const str = d.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+            const parts = str.split('-');
+            return new Date(parts[0], parts[1] - 1, parts[2]);
+        };
+
+        const todayStart = getCairoDayStart(now);
+        const msgStart = getCairoDayStart(date);
+        const diffDays = Math.round((todayStart - msgStart) / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 0) {
+            return 'اليوم';
+        } else if (diffDays === 1) {
+            return 'أمس';
+        } else if (diffDays === 2) {
+            return 'منذ يومين';
+        } else if (diffDays > 2 && diffDays < 7) {
+            return date.toLocaleDateString('ar-EG', { weekday: 'long', timeZone: 'Africa/Cairo' });
+        } else {
+            return date.toLocaleDateString('ar-EG', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'long',
+                year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+                timeZone: 'Africa/Cairo'
+            });
+        }
+    }
+
+    // إضافة فاصل الأيام في صندوق الرسائل
+    function addDateDivider(box, label, key) {
+        if (!box || !label) return;
+        const div = document.createElement('div');
+        div.className = 'lc-date-divider';
+        if (key) div.dataset.dateKey = key;
+        div.innerHTML = `<span>${escapeHtml(label)}</span>`;
+        box.appendChild(div);
+    }
+
+    function ensureDateDivider(date) {
+        const box = document.getElementById('lcMsgs');
+        if (!box || !date) return;
+        const dateKey = getDateHeaderKey(date);
+        if (!dateKey) return;
+
+        const dividers = box.querySelectorAll('.lc-date-divider');
+        const lastDivider = dividers.length > 0 ? dividers[dividers.length - 1] : null;
+        const lastDividerKey = lastDivider ? lastDivider.dataset.dateKey : null;
+
+        if (dateKey !== lastDividerKey) {
+            addDateDivider(box, getDateHeaderLabel(date), dateKey);
+        }
+    }
 
     function cleanPhone(p) {
         if (!p) return '';
@@ -701,7 +836,9 @@
             const phoneFromJid = (!isLid && msg.remoteJid && msg.remoteJid.endsWith('@s.whatsapp.net')) ? msg.remoteJid.split('@')[0] : '';
             const phone = msg.phoneNumber || phoneFromJid || '';
             const nm = msg.customerName || phone || (isLid ? 'عميل واتساب' : msg.remoteJid.split('@')[0]);
-            const ts = new Date(msg.createdAt || Date.now()).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'});
+            const msgDate = new Date(msg.createdAt || Date.now());
+            const ts = formatChatTime(msgDate);
+            const lastAtMs = msgDate.getTime();
 
             let el = findContactItem(msg.remoteJid, phone);
 
@@ -720,6 +857,8 @@
                     el.dataset.handoff = msg.is_handoff ? 'true' : 'false';
                     el.dataset.name = nm;
                     el.dataset.phone = phone;
+                    el.dataset.lastAt = lastAtMs;
+                    if (msg.CustomerId) el.dataset.customerId = msg.CustomerId;
                     el.onclick = () => loadChat(msg.remoteJid, safeNm, msg.is_handoff || false, phone);
 
                     el.innerHTML = `
@@ -738,14 +877,18 @@
                         </div>
                     `;
                     listContainer.prepend(el);
+                    sortContactsList();
                     if (msg.role === 'user') playMessageChime();
                 }
             } else {
+                el.dataset.lastAt = lastAtMs;
+                if (msg.CustomerId && !el.dataset.customerId) el.dataset.customerId = msg.CustomerId;
                 const prevEl = el.querySelector('.lc-prev');
                 if (prevEl) prevEl.textContent = content;
                 const tEl = el.querySelector('.lc-t');
                 if (tEl) tEl.textContent = ts;
-                if (el.parentElement) el.parentElement.prepend(el);
+
+                sortContactsList();
 
                 const isThisChatActive = isCurrentChat(msg.remoteJid, phone);
                 if (!isThisChatActive && msg.role === 'user') {
@@ -825,6 +968,16 @@
             let el = findContactItem(conv.remoteJid, conv.phoneNumber);
             if (el) {
                 el.dataset.handoff = conv.is_handoff ? 'true' : 'false';
+                if (conv.CustomerId && !el.dataset.customerId) el.dataset.customerId = conv.CustomerId;
+                if (conv.lastMessageAt) {
+                    el.dataset.lastAt = new Date(conv.lastMessageAt).getTime();
+                    const tEl = el.querySelector('.lc-t');
+                    if (tEl) tEl.textContent = formatChatTime(conv.lastMessageAt);
+                }
+                if (conv.lastMessageText) {
+                    const prevEl = el.querySelector('.lc-prev');
+                    if (prevEl) prevEl.textContent = conv.lastMessageText.replace(/\[M:\d+\]/g, '').trim();
+                }
                 const av = el.querySelector('.lc-av');
                 if (conv.is_handoff) {
                     av.classList.add('handoff-av');
@@ -843,6 +996,7 @@
                     curHO = conv.is_handoff;
                     updHO(curHO);
                 }
+                sortContactsList();
             }
         });
     }
@@ -941,7 +1095,9 @@
                 content: m.quotedContent,
                 sender: m.quotedSender || (m.role === 'model' ? 'أنت' : 'العميل')
             } : null;
-            addBbl(content, m.role === 'user', new Date(m.createdAt), m.media_url, m.id, quotedInfo, m.reaction);
+
+            const mDate = new Date(m.createdAt || Date.now());
+            addBbl(content, m.role === 'user', mDate, m.media_url, m.id, quotedInfo, m.reaction);
         });
         box.scrollTop = box.scrollHeight;
         const it = document.querySelector(`.lc-item[data-jid="${jid}"]`);
@@ -1042,10 +1198,13 @@
     function addBbl(txt, isIn, date, mediaUrl, msgId, quotedInfo, reactionEmoji) {
         if (!txt && !mediaUrl) return;
         const box = document.getElementById('lcMsgs');
+        if (!box) return;
+        if (date) ensureDateDivider(date);
         const d = document.createElement('div');
         d.className = `lc-bbl ${isIn ? 'bbl-in' : 'bbl-out'}`;
         if (msgId) d.dataset.mid = msgId;
-        const t = date ? date.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'}) : '';
+        const rawTime = date ? date.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true, timeZone:'Africa/Cairo'}) : '';
+        const t = rawTime.replace('AM', 'ص').replace('PM', 'م');
 
         let contentHtml = '';
 
@@ -1579,6 +1738,18 @@
         }
     });
 
+    function sortContactsList() {
+        const listContainer = document.querySelector('.lc-contacts-list');
+        if (!listContainer) return;
+        const items = Array.from(listContainer.querySelectorAll('.lc-item'));
+        items.sort((a, b) => {
+            const timeA = parseInt(a.dataset.lastAt || '0', 10);
+            const timeB = parseInt(b.dataset.lastAt || '0', 10);
+            return timeB - timeA;
+        });
+        items.forEach(item => listContainer.appendChild(item));
+    }
+
     function updateContactsListFromData(conversations) {
         const listContainer = document.querySelector('.lc-contacts-list');
         if (!listContainer || !conversations) return;
@@ -1588,7 +1759,8 @@
             const phoneFromJid = (!isLid && c.remoteJid.endsWith('@s.whatsapp.net')) ? c.remoteJid.split('@')[0] : '';
             const phone = c.phoneNumber || phoneFromJid || '';
             const nm = c.customerName || phone || (isLid ? 'عميل' : c.remoteJid.split('@')[0]);
-            const ts = new Date(c.lastMessageAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'});
+            const ts = formatChatTime(c.lastMessageAt);
+            const lastAtMs = new Date(c.lastMessageAt || 0).getTime();
             const content = c.lastMessageText ? c.lastMessageText.replace(/\[M:\d+\]/g, '').trim() : '...';
 
             let el = findContactItem(c.remoteJid, phone);
@@ -1605,6 +1777,8 @@
                 el.dataset.handoff = c.is_handoff ? 'true' : 'false';
                 el.dataset.name = nm;
                 el.dataset.phone = phone;
+                el.dataset.lastAt = lastAtMs;
+                if (c.CustomerId) el.dataset.customerId = c.CustomerId;
                 el.onclick = () => loadChat(c.remoteJid, safeNm, c.is_handoff || false, phone);
 
                 el.innerHTML = `
@@ -1622,15 +1796,14 @@
                         ${c.unreadCount > 0 ? `<span class="unread-pill">${c.unreadCount}</span>` : ''}
                     </div>
                 `;
-                listContainer.prepend(el);
+                listContainer.appendChild(el);
             } else {
+                el.dataset.lastAt = lastAtMs;
+                if (c.CustomerId && !el.dataset.customerId) el.dataset.customerId = c.CustomerId;
                 const prevEl = el.querySelector('.lc-prev');
                 if (prevEl && prevEl.textContent !== content) prevEl.textContent = content;
                 const tEl = el.querySelector('.lc-t');
                 if (tEl) tEl.textContent = ts;
-
-                // مهم جداً للموبايل: رفع المحادثة المحدثة لأعلى القائمة
-                if (el.parentElement) el.parentElement.prepend(el);
 
                 const isThisChatActive = isCurrentChat(c.remoteJid, phone);
                 let badge = el.querySelector('.unread-pill');
@@ -1649,6 +1822,89 @@
                 }
             }
         });
+
+        // ترتيب القائمة تنازلياً دائماً (الأحدث فوق)
+        sortContactsList();
+    }
+
+    async function openChatByCustomerId(customerId) {
+        if (!customerId) return;
+        // 1. نبحث أولاً في عناصر الـ DOM الموجودة
+        let targetEl = document.querySelector(`.lc-item[data-customer-id="${customerId}"]`);
+        if (targetEl) {
+            targetEl.click();
+            const inp = document.getElementById('lcIn');
+            if (inp) setTimeout(() => inp.focus(), 300);
+            return;
+        }
+
+        // 2. لو مش موجود في الصفحة حالياً، نجلبه فورياً من السيرفر
+        try {
+            const res = await fetch(`/dashboard/livechat/api/customer-chat/${customerId}`);
+            const data = await res.json();
+                const c = data.chat || data.conversation;
+                if (data.success && c) {
+                    const isLid = c.remoteJid && c.remoteJid.endsWith('@lid');
+                    const phoneFromJid = (!isLid && c.remoteJid && c.remoteJid.endsWith('@s.whatsapp.net')) ? c.remoteJid.split('@')[0] : '';
+                    const phone = c.phoneNumber || phoneFromJid || '';
+                    const nm = c.customerName || phone || (isLid ? 'عميل' : c.remoteJid.split('@')[0]);
+
+                    updateContactsListFromData([c]);
+                    loadChat(c.remoteJid, nm, c.is_handoff || false, phone);
+                    const inp = document.getElementById('lcIn');
+                    if (inp) setTimeout(() => inp.focus(), 300);
+                }
+        } catch (err) {
+            console.error('Error auto opening chat for customer:', err);
+        }
+    }
+    window.openChatByCustomerId = openChatByCustomerId;
+
+    function handleAutoOpenOnLoad() {
+        // 1. فحص serverAutoOpen القادم من السيرفر
+        if (serverAutoOpen && (serverAutoOpen.remoteJid || serverAutoOpen.customerId || serverAutoOpen.phoneNumber)) {
+            if (serverAutoOpen.remoteJid) {
+                let el = findContactItem(serverAutoOpen.remoteJid, serverAutoOpen.phoneNumber);
+                if (el) {
+                    el.click();
+                    const inp = document.getElementById('lcIn');
+                    if (inp) setTimeout(() => inp.focus(), 350);
+                    return;
+                } else {
+                    loadChat(serverAutoOpen.remoteJid, serverAutoOpen.name || 'عميل', serverAutoOpen.is_handoff || false, serverAutoOpen.phoneNumber || '');
+                    const inp = document.getElementById('lcIn');
+                    if (inp) setTimeout(() => inp.focus(), 350);
+                    return;
+                }
+            }
+            if (serverAutoOpen.customerId) {
+                openChatByCustomerId(serverAutoOpen.customerId);
+                return;
+            }
+        }
+
+        // 2. فحص الـ URL Query Params كـ Fallback
+        const urlParams = new URLSearchParams(window.location.search);
+        const qCustId = urlParams.get('customerId');
+        const qJid = urlParams.get('remoteJid');
+        const qPhone = urlParams.get('phone');
+
+        if (qCustId) {
+            openChatByCustomerId(qCustId);
+        } else if (qJid || qPhone) {
+            let el = findContactItem(qJid, qPhone);
+            if (el) {
+                el.click();
+                const inp = document.getElementById('lcIn');
+                if (inp) setTimeout(() => inp.focus(), 350);
+            }
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', handleAutoOpenOnLoad);
+    } else {
+        handleAutoOpenOnLoad();
     }
 
     function handleMobileWakeUp() {

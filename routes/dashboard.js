@@ -943,22 +943,129 @@ async function getLivechatTargetUserId(currentUser) {
     }
 }
 
+function formatChatTime(dateInput) {
+    if (!dateInput) return '';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return '';
+
+    const now = new Date();
+    const getCairoDayStart = (d) => {
+        const str = d.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+        const parts = str.split('-');
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+    };
+
+    const todayStart = getCairoDayStart(now);
+    const msgStart = getCairoDayStart(date);
+    const diffDays = Math.round((todayStart - msgStart) / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) {
+        const rawTime = date.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+            timeZone: 'Africa/Cairo'
+        });
+        return rawTime.replace('AM', 'ص').replace('PM', 'م');
+    } else if (diffDays === 1) {
+        return 'أمس';
+    } else if (diffDays === 2) {
+        return 'منذ يومين';
+    } else if (diffDays > 2 && diffDays < 7) {
+        return date.toLocaleDateString('ar-EG', { weekday: 'long', timeZone: 'Africa/Cairo' });
+    } else {
+        const dNum = String(date.getDate()).padStart(2, '0');
+        const mNum = String(date.getMonth() + 1).padStart(2, '0');
+        const yNum = date.getFullYear();
+        return `${dNum}/${mNum}/${yNum}`;
+    }
+}
+
 router.get('/livechat', async (req, res) => {
     try {
         const targetUserId = await getLivechatTargetUserId(req.user);
+        const { customerId, remoteJid, phone } = req.query;
 
-        const conversations = await Conversation.findAll({
+        let conversations = await Conversation.findAll({
             where: { UserId: targetUserId },
             order: [['lastMessageAt', 'DESC']],
             limit: 100
         });
+
+        let autoOpen = null;
+
+        // إذا تم فتح الصفحة من خلال إشعار لعميل محدد
+        if (customerId || remoteJid || phone) {
+            let targetConv = null;
+            let targetCustomer = null;
+
+            if (customerId) {
+                targetCustomer = await Customer.findByPk(customerId);
+                if (targetCustomer) {
+                    targetConv = conversations.find(c => 
+                        (c.CustomerId && String(c.CustomerId) === String(customerId)) ||
+                        (targetCustomer.remoteJid && c.remoteJid === targetCustomer.remoteJid) ||
+                        (targetCustomer.phoneNumber && c.phoneNumber === targetCustomer.phoneNumber)
+                    );
+
+                    if (!targetConv) {
+                        const jidsToSearch = [];
+                        if (targetCustomer.remoteJid) jidsToSearch.push(targetCustomer.remoteJid);
+                        if (targetCustomer.phoneNumber) jidsToSearch.push(`${targetCustomer.phoneNumber}@s.whatsapp.net`);
+
+                        targetConv = await Conversation.findOne({
+                            where: {
+                                UserId: targetUserId,
+                                [Op.or]: [
+                                    { CustomerId: customerId },
+                                    { remoteJid: { [Op.in]: jidsToSearch } }
+                                ]
+                            }
+                        });
+                        if (targetConv) {
+                            conversations.unshift(targetConv);
+                        }
+                    }
+                }
+            } else if (remoteJid) {
+                targetConv = conversations.find(c => c.remoteJid === remoteJid);
+                if (!targetConv) {
+                    targetConv = await Conversation.findOne({
+                        where: { UserId: targetUserId, remoteJid }
+                    });
+                    if (targetConv) conversations.unshift(targetConv);
+                }
+            }
+
+            if (targetConv) {
+                autoOpen = {
+                    remoteJid: targetConv.remoteJid,
+                    name: targetConv.customerName || (targetCustomer ? targetCustomer.customerName : '') || targetConv.phoneNumber || targetConv.remoteJid.split('@')[0],
+                    is_handoff: !!targetConv.is_handoff,
+                    phoneNumber: targetConv.phoneNumber || (targetCustomer ? targetCustomer.phoneNumber : ''),
+                    customerId: targetCustomer ? targetCustomer.id : targetConv.CustomerId
+                };
+            } else if (targetCustomer && (targetCustomer.remoteJid || targetCustomer.phoneNumber)) {
+                const fallbackJid = targetCustomer.remoteJid || `${targetCustomer.phoneNumber}@s.whatsapp.net`;
+                autoOpen = {
+                    remoteJid: fallbackJid,
+                    name: targetCustomer.customerName || targetCustomer.phoneNumber || 'عميل',
+                    is_handoff: false,
+                    phoneNumber: targetCustomer.phoneNumber || '',
+                    customerId: targetCustomer.id
+                };
+            }
+        }
+
         const handoffCount = conversations.filter(c => c.is_handoff).length;
         res.render('livechat', {
             user: req.user,
             targetUserId,
             page: 'livechat',
             conversations: JSON.parse(JSON.stringify(conversations)),
-            handoffCount
+            handoffCount,
+            autoOpen,
+            formatChatTime
         });
     } catch (err) {
         console.error('LiveChat error:', err);
@@ -1019,6 +1126,55 @@ router.get('/livechat/api/conversations', async (req, res) => {
     } catch (err) {
         console.error('GetConversations API error:', err);
         res.status(500).json({ error: err.message || 'Failed to load conversations' });
+    }
+});
+
+router.get('/livechat/api/customer-chat/:customerId', async (req, res) => {
+    try {
+        const { customerId } = req.params;
+        const targetUserId = await getLivechatTargetUserId(req.user);
+        const customer = await Customer.findByPk(customerId);
+        if (!customer) {
+            return res.status(404).json({ success: false, error: 'العميل غير موجود' });
+        }
+
+        const jidsToSearch = [];
+        if (customer.remoteJid) jidsToSearch.push(customer.remoteJid);
+        if (customer.phoneNumber) jidsToSearch.push(`${customer.phoneNumber}@s.whatsapp.net`);
+
+        let conversation = await Conversation.findOne({
+            where: {
+                UserId: targetUserId,
+                [Op.or]: [
+                    { CustomerId: customer.id },
+                    { remoteJid: { [Op.in]: jidsToSearch } }
+                ]
+            }
+        });
+
+        const remoteJid = conversation?.remoteJid || customer.remoteJid || `${customer.phoneNumber}@s.whatsapp.net`;
+        const customerName = conversation?.customerName || customer.customerName || customer.phoneNumber || 'عميل';
+        const is_handoff = conversation ? !!conversation.is_handoff : false;
+        const phoneNumber = conversation?.phoneNumber || customer.phoneNumber || '';
+
+        const chatObj = {
+            remoteJid,
+            customerName,
+            is_handoff,
+            phoneNumber,
+            customerId: customer.id,
+            lastMessageAt: conversation?.lastMessageAt || new Date(),
+            lastMessageText: conversation?.lastMessageText || ''
+        };
+
+        res.json({
+            success: true,
+            chat: chatObj,
+            conversation: chatObj
+        });
+    } catch (err) {
+        console.error('Customer chat API error:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

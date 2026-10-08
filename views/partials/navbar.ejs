@@ -227,7 +227,16 @@
                         if (currentCount > 0) updateNotificationBadge(currentCount - 1);
                     }
                     if (customerId) {
-                        window.location.href = `/dashboard/livechat?customerId=${customerId}`;
+                        if (window.location.pathname.startsWith('/dashboard/livechat') && typeof window.openChatByCustomerId === 'function') {
+                            window.openChatByCustomerId(customerId);
+                            const notifDropBtn = document.getElementById('notificationDropdown');
+                            if (notifDropBtn && typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
+                                const dropInstance = bootstrap.Dropdown.getInstance(notifDropBtn);
+                                if (dropInstance) dropInstance.hide();
+                            }
+                        } else {
+                            window.location.href = `/dashboard/livechat?customerId=${customerId}`;
+                        }
                     }
                 }
             })
