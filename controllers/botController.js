@@ -84,6 +84,42 @@ async function getCachedParticipatingGroups(sock, userId = 'default', forceRefre
     return groups;
 }
 
+// Helper: Clean raw AI response to ensure no raw JSON ({ "reply": "..." } or { "text": "..." }) leaks to customers
+export function extractCleanAiText(raw) {
+    if (!raw) return "";
+    let str = String(raw).trim();
+
+    // 1. Remove Markdown code blocks ```json ... ``` or ``` ... ```
+    str = str.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
+
+    // 2. If it starts with { and ends with }, parse JSON and extract response text
+    if (str.startsWith('{') && str.endsWith('}')) {
+        try {
+            const parsed = JSON.parse(str);
+            if (typeof parsed === 'object' && parsed !== null) {
+                const candidate = parsed.text || parsed.reply || parsed.response || parsed.message || parsed.content || parsed.msg || parsed.answer || parsed.greeting || parsed.body;
+                if (candidate && typeof candidate === 'string') {
+                    return candidate.trim();
+                }
+            }
+        } catch (e) {
+            // Regex fallback if JSON has unescaped characters
+            const match = str.match(/"(?:text|reply|response|message|content|msg|answer|greeting|body)":\s*"([\s\S]*?)"(?:\s*,|\s*})/i);
+            if (match && match[1]) {
+                return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
+            }
+        }
+    }
+
+    // 3. Regex fallback anywhere in the string if it contains {"reply": "..."} or {"text": "..."}
+    const inlineMatch = str.match(/\{\s*"(?:text|reply|response|message|content|msg|answer)":\s*"([\s\S]*?)"\s*\}/i);
+    if (inlineMatch && inlineMatch[1]) {
+        return inlineMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
+    }
+
+    return str;
+}
+
 // Helper: Calculate random delay based on text length to simulate human behavior
 function calculateHumanDelay(textLength, minSec = 3.5, maxSec = 22) {
     const base = Math.random() * (5 - minSec) + minSec; // 3.5 to 5 sec base
@@ -500,22 +536,22 @@ async function callVertexAI(remoteJid, userText, mediaBuffer = null, mediaMime =
                 systemInstruction += `\n`;
             });
 
-            systemInstruction += '\n💡 **تعليمات هامة جداً للرد (تنسيق JSON):**\n';
-            systemInstruction += '1. **يجب** أن يكون ردك دائماً بتنسيق JSON صحيح وحصرياً.\n';
-            systemInstruction += '2. الحقل "text": ضع فيه ردك النصي الطبيعي للعميل.\n';
-            systemInstruction += '3. الحقل "show_products": إذا طلب العميل رؤية صور أو تفاصيل لمنتجات/خدمات معينة من القائمة أعلاه، ضع أرقام الـ ID الخاصة بهذه المنتجات في مصفوفة (مثال: [1, 5]).\n';
-            systemInstruction += '4. إذا لم يطلب العميل عرض منتجات معينة، أو كان مجرد سؤال عام، اجعل "show_products" مصفوفة فارغة [].\n';
-            systemInstruction += '5. 🛑 **قاعدة هامة:** إذا طلب العميل منتجات بشكل عام (مثلاً: "إيه الأسعار" أو "وريني القائمة")، **اشرح المنتجات في الـ text فقط** واسأله "تحب أبعتلك صور أو تفاصيل أي منهم؟" ولا تضع IDs في "show_products" حتى يحدد ماذا يريد.\n';
-            systemInstruction += '6. مثال للرد الصحيح:\n';
-            systemInstruction += '```json\n{\n  "text": "تفضل، هذه صور الجينز المتاحة لدينا.",\n  "show_products": [1, 2]\n}\n```\n';
+            systemInstruction += '\n💡 **المنتجات التفاعلية:**\n';
+            systemInstruction += 'الحقل "show_products": إذا طلب العميل رؤية صور أو تفاصيل لمنتجات/خدمات معينة من القائمة أعلاه، ضع أرقام الـ ID الخاصة بهذه المنتجات في مصفوفة (مثال: [1, 5]). إذا لم يطلب منتجات معينة اجعلها مصفوفة فارغة [].\n';
         }
     }
 
+    // Always enforce JSON structure rule
+    systemInstruction += '\n\n💡 **تعليمات هامة جداً للرد (تنسيق JSON حصرياً):**\n';
+    systemInstruction += '1. **يجب** أن يكون ردك دائماً بتنسيق JSON صحيح وحصرياً كالتالي: {"text": "نص الرد للعميل هنا", "show_products": []}\n';
+    systemInstruction += '2. الحقل الإجباري دائماً هو "text": ضع فيه ردك النصي الطبيعي للعميل (ممنوع استخدام مسمى reply أو غيره نهائياً).\n';
+    systemInstruction += '3. لا تضع أي كلام أو مقدمات خارج كائن الـ JSON نهائياً.\n';
+
     // Strict anti-hallucination and handoff instruction
     systemInstruction += '\n\n 💡 **تعليمات صارمة جداً (يمنع مخالفتها):**\n';
-    systemInstruction += '1. أنت مساعد ذكي تمثل محلات الإخوة، يمكنك الرد على التحيات (مثل السلام عليكم، شكراً) بشكل طبيعي ولطيف.\n';
-    systemInstruction += '2. يمنع منعاً باتاً تأليف أي سعر أو تفاصيل منتج من خيالك إذا لم تكن موجودة في السياق أعلاه.\n';
-    systemInstruction += '3. إذا سألك العميل سؤالاً فنياً معقداً أو خارج تخصص المتجر أو طلب التحدث لموظف بشري، يجب عليك الرد بكلمة واحدة فقط وهي بالضبط: [HANDOFF]\n';
+    systemInstruction += '1. أنت مساعد ذكي، يمكنك الرد على التحيات (مثل السلام عليكم، مرحباً، شكراً) بشكل طبيعي ولطيف وودود.\n';
+    systemInstruction += '2. يمنع منعاً باتاً تأليف أي سعر أو تفاصيل من خيالك إذا لم تكن موجودة في التعليمات المعتمدة أعلاه.\n';
+    systemInstruction += '3. إذا سألك العميل سؤالاً فنياً معقداً أو خارج تخصصك أو طلب التحدث لموظف بشري، يجب عليك الرد بكلمة واحدة فقط وهي بالضبط: [HANDOFF]\n';
     systemInstruction += '4. لا تكتب أي كلام آخر مع كلمة [HANDOFF].\n';
 
     const history = dbMessages.reverse().map(msg => ({
@@ -594,24 +630,34 @@ async function callVertexAI(remoteJid, userText, mediaBuffer = null, mediaMime =
         let parsedReply = { text: "عذراً، حدث خطأ في معالجة الرد.", show_products: [] };
         try {
             if (rawReply) {
-                const cleanJson = rawReply.replace(/^```json\s*/, "").replace(/\s*```$/, "").trim();
-                const tempParsed = JSON.parse(cleanJson);
+                const cleanJson = rawReply.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
+                let tempParsed = null;
+                try {
+                    tempParsed = JSON.parse(cleanJson);
+                } catch (pe) {
+                    const match = cleanJson.match(/"(?:text|reply|response|message|content|msg|answer|greeting|body)":\s*"([\s\S]*?)"(?:\s*,|\s*})/i);
+                    if (match && match[1]) {
+                        tempParsed = { text: match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') };
+                    }
+                }
+
                 if (typeof tempParsed === 'string') {
                     parsedReply.text = tempParsed;
                 } else if (typeof tempParsed === 'object' && tempParsed !== null) {
                     parsedReply = tempParsed;
-                    // Fix AI hallucinatory keys
-                    if (!parsedReply.text) {
-                        parsedReply.text = parsedReply.response || parsedReply.greeting || parsedReply.answer || rawReply;
-                    }
-                } else {
-                    parsedReply.text = rawReply;
+                    parsedReply.text = tempParsed.text || tempParsed.reply || tempParsed.response || tempParsed.message || tempParsed.content || tempParsed.msg || tempParsed.answer || tempParsed.greeting || tempParsed.body;
+                }
+
+                if (!parsedReply.text) {
+                    parsedReply.text = extractCleanAiText(rawReply);
                 }
             }
         } catch (e) {
             console.error("Failed to parse AI JSON:", rawReply);
-            if (rawReply) parsedReply.text = rawReply;
+            if (rawReply) parsedReply.text = extractCleanAiText(rawReply);
         }
+
+        parsedReply.text = extractCleanAiText(parsedReply.text);
         
         // DEBUG: Print AI reply to see what it actually returns
         console.log(`[AI Reply Debug] Raw reply: "${rawReply?.substring(0, 200)}..."`);
@@ -2582,6 +2628,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
 
 
         let replyText = aiResponse ? aiResponse.text : "";
+        replyText = extractCleanAiText(replyText);
 
         if (replyText) {
             // Check for AI Handoff trigger
@@ -2685,6 +2732,7 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                 return `${cleanText}: ${cleanUrl}`;
             });
 
+            replyText = extractCleanAiText(replyText);
             await sendHumanMessage(sock, remoteJid, { text: replyText }, { userId });
 
             const savedResponse = await Message.create({
@@ -3406,14 +3454,33 @@ export async function simulateChat(userId, userText) {
         let parsedReply = { text: "عذراً، حدث خطأ في معالجة الرد.", show_products: [] };
         try {
             if (rawReply) {
-                const cleanJson = rawReply.replace(/^```json\s*/, "").replace(/\s*```$/, "").trim();
-                parsedReply = JSON.parse(cleanJson);
+                const cleanJson = rawReply.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
+                let tempParsed = null;
+                try {
+                    tempParsed = JSON.parse(cleanJson);
+                } catch (pe) {
+                    const match = cleanJson.match(/"(?:text|reply|response|message|content|msg|answer|greeting|body)":\s*"([\s\S]*?)"(?:\s*,|\s*})/i);
+                    if (match && match[1]) {
+                        tempParsed = { text: match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') };
+                    }
+                }
+
+                if (typeof tempParsed === 'object' && tempParsed !== null) {
+                    parsedReply = tempParsed;
+                    parsedReply.text = tempParsed.text || tempParsed.reply || tempParsed.response || tempParsed.message || tempParsed.content || tempParsed.msg || tempParsed.answer || tempParsed.greeting || tempParsed.body;
+                } else if (typeof tempParsed === 'string') {
+                    parsedReply.text = tempParsed;
+                }
+
+                if (!parsedReply.text) {
+                    parsedReply.text = extractCleanAiText(rawReply);
+                }
             }
         } catch (e) {
-            if (rawReply) parsedReply.text = rawReply;
+            if (rawReply) parsedReply.text = extractCleanAiText(rawReply);
         }
 
-        let reply = parsedReply.text;
+        let reply = extractCleanAiText(parsedReply.text);
 
         if (parsedReply.show_products && parsedReply.show_products.length > 0) {
             const requestedProducts = await Product.findAll({
