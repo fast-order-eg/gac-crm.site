@@ -2727,54 +2727,68 @@ export const startSession = async (userId, io, phoneNumber = null) => {
         // ======================================================
         // 🔒 Menu-Only Mode — وضع القوائم فقط
         // ======================================================
-        // حظر الرسائل الحرة وإرسال رسالة التوجيه يتم فقط وفقط إذا كانت الزراير مفعلة والقوائم تعمل.
-        // إذا كانت الزراير موقوفة (buttonsStopped = true)، يتم تخطي هذا البلوك تماماً،
-        // ولا يتم إرسال رسالة "معلش مفهمتش قصدك بالظبط" ولا يتم حظر النص الحر إطلاقاً،
-        // بل تنتقل المعالجة مباشرة إلى خطوة (5) للذكاء الاصطناعي (Vertex AI) للرد على العميل بشكل طبيعي.
-        if (user.bot_mode === 'menu_only' && !buttonsStopped && text && !remoteJid.endsWith('@g.us')) {
-            // Free text that is not a number and not a trigger word → show guidance + re-send menu
-            console.log(`[Menu-Only] 🔒 Free text blocked for ${remoteJid}: "${text}"`);
-            
-            const greetings = ['السلام عليكم', 'سلام عليكم', 'مرحبا', 'مرحباً', 'هلا', 'تفاصيل', 'التفاصيل', 'hi', 'hello', 'هاي'];
-            const isGreeting = greetings.some(g => normalizedFreeText.includes(g));
+        if (user.bot_mode === 'menu_only') {
+            // إذا كانت ردود الأزرار معطلة، البوت صامت تماماً (لا أزرار ولا ذكاء اصطناعي)
+            if (buttonsStopped) {
+                console.log(`[Menu-Only] 🛑 Buttons disabled and mode is menu_only. Bot is completely silent for ${remoteJid}. Human moderators handle it.`);
+                return;
+            }
 
-            if (!isGreeting) {
-                const guidanceMsg = 'معلش مفهمتش قصدك بالظبط 😅\n\n👉 ياريت تختار رقم من القايمة اللي تحت، أو لو حابب تتكلم مع المبيعات اكتب كلمة "مبيعات" بس.';
-                const sentGuidance = await sendHumanMessage(sock, remoteJid, { text: guidanceMsg }, { userId });
-                const svGuidance = await Message.create({
-                    UserId: userId,
-                    remoteJid,
-                    role: 'model',
-                    content: guidanceMsg,
-                    messageId: sentGuidance?.key?.id || null
+            if (text && !remoteJid.endsWith('@g.us')) {
+                // Free text that is not a number and not a trigger word → show guidance + re-send menu
+                console.log(`[Menu-Only] 🔒 Free text blocked for ${remoteJid}: "${text}"`);
+                
+                const greetings = ['السلام عليكم', 'سلام عليكم', 'مرحبا', 'مرحباً', 'هلا', 'تفاصيل', 'التفاصيل', 'hi', 'hello', 'هاي'];
+                const isGreeting = greetings.some(g => normalizedFreeText.includes(g));
+
+                if (!isGreeting) {
+                    const guidanceMsg = 'معلش مفهمتش قصدك بالظبط 😅\n\n👉 ياريت تختار رقم من القايمة اللي تحت، أو لو حابب تتكلم مع المبيعات اكتب كلمة "مبيعات" بس.';
+                    const sentGuidance = await sendHumanMessage(sock, remoteJid, { text: guidanceMsg }, { userId });
+                    const svGuidance = await Message.create({
+                        UserId: userId,
+                        remoteJid,
+                        role: 'model',
+                        content: guidanceMsg,
+                        messageId: sentGuidance?.key?.id || null
+                    });
+                    if (io) broadcastNewMessage(io, userId, svGuidance);
+                }
+                
+                // Re-send the last menu that was sent to this customer, or default menu
+                const lastMenuMsg = await Message.findOne({
+                    where: { 
+                        UserId: userId, 
+                        remoteJid, 
+                        role: 'model',
+                        content: { [Op.like]: '%[M:%]' } 
+                    },
+                    order: [['createdAt', 'DESC']]
                 });
-                if (io) broadcastNewMessage(io, userId, svGuidance);
+                
+                let resendMenuId = null;
+                if (lastMenuMsg && lastMenuMsg.content) {
+                    const menuMatch = lastMenuMsg.content.match(/\[M:(\d+)\]/);
+                    if (menuMatch) resendMenuId = parseInt(menuMatch[1]);
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                await sendInteractiveButtons(sock, remoteJid, userId, io, resendMenuId, conversation?.customerName);
+                return;
             }
-            
-            // Re-send the last menu that was sent to this customer, or default menu
-            const lastMenuMsg = await Message.findOne({
-                where: { 
-                    UserId: userId, 
-                    remoteJid, 
-                    role: 'model',
-                    content: { [Op.like]: '%[M:%]' } 
-                },
-                order: [['createdAt', 'DESC']]
-            });
-            
-            let resendMenuId = null;
-            if (lastMenuMsg && lastMenuMsg.content) {
-                const menuMatch = lastMenuMsg.content.match(/\[M:(\d+)\]/);
-                if (menuMatch) resendMenuId = parseInt(menuMatch[1]);
-            }
-            
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            await sendInteractiveButtons(sock, remoteJid, userId, io, resendMenuId, conversation?.customerName);
+
+            // في وضع القوائم فقط: الرسائل الصوتية أو الوسائط لا يتم تحويلها للذكاء الاصطناعي إطلاقاً
+            console.log(`[Menu-Only] 🛑 Skipping AI response for non-text message in menu_only mode for ${remoteJid}`);
             return;
         }
         // === End Menu-Only Mode ===
 
         // 5. Process AI Response (Vertex AI for Customers)
+        // 🔒 حظر قاطع: منع استدعاء الذكاء الاصطناعي إذا كانت الأزرار معطلة أو وضع البوت قوائم فقط
+        if (buttonsStopped || user.bot_mode === 'menu_only') {
+            console.log(`[Bot Control] 🛑 AI response blocked for ${remoteJid} (buttonsStopped: ${buttonsStopped}, bot_mode: ${user.bot_mode})`);
+            return;
+        }
+
         // Simulate Typing
         await sock.sendPresenceUpdate('composing', remoteJid);
 
