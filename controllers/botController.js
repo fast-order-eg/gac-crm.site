@@ -3802,16 +3802,45 @@ export async function teachBot(userId, userText) {
 }
 
 // ============================================================
-// 🛡️ Live Chat & Human Handoff Method
+// 🛡️ Live Chat & Human Handoff Method (Direct & Instant for Human Staff)
 // ============================================================
 export async function sendManualMessage(userId, remoteJid, text) {
     const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
     if (!sock) throw new Error("البوت غير متصل حالياً.");
     
-    // إرسال الرسالة عبر الطابور
-    const sentMsg = await sendHumanMessage(sock, remoteJid, { text }, { userId });
-    
-    // حفظ الرسالة مع معرّفها لمنع التكرار
+    // 1. قراءة الرسائل المعلقة للعميل (وضع الصحين الزرق)
+    try {
+        const keysToRead = whatsappQueue.consumeReadKeys(remoteJid);
+        if (keysToRead && keysToRead.length > 0 && typeof sock.readMessages === 'function') {
+            await sock.readMessages(keysToRead);
+        }
+    } catch (rErr) {}
+
+    // 2. إشارة "يكتب الآن" سريعة
+    try {
+        await sock.sendPresenceUpdate('composing', remoteJid);
+    } catch (pErr) {}
+
+    // 3. تنويع بصمة النص لمنع تطابق الهاش
+    const diversifiedText = whatsappQueue.diversifyTextFingerprint(text);
+
+    // 4. إرسال فوري ومباشر إلى واتساب دون الدخول في طابور المحاكاة البطيء
+    const sentMsg = await sock.sendMessage(remoteJid, { text: diversifiedText });
+
+    // 5. تسجيل معرّف الرسالة فوراً في recentSystemMsgIds لمنع التكرار ومعالجتها كرسالة واردة
+    if (sentMsg?.key?.id) {
+        recentSystemMsgIds.add(sentMsg.key.id);
+        setTimeout(() => {
+            recentSystemMsgIds.delete(sentMsg.key.id);
+        }, 120000);
+    }
+
+    // 6. إيقاف حالة الكتابة
+    try {
+        await sock.sendPresenceUpdate('paused', remoteJid);
+    } catch (e) {}
+
+    // 7. حفظ الرسالة في قاعدة البيانات مع معرّفها
     const savedMsg = await Message.create({
         UserId: userId,
         remoteJid,
@@ -3821,7 +3850,7 @@ export async function sendManualMessage(userId, remoteJid, text) {
         status: 'sent'
     });
     
-    // تحديث المحادثة
+    // 8. تحديث المحادثة
     await Conversation.update(
         { lastMessageText: text, lastMessageAt: new Date() },
         { where: { UserId: userId, remoteJid } }
@@ -3847,18 +3876,36 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
         messageContent = { audio: fileBuffer, mimetype: mimetype || 'audio/ogg; codecs=opus', ptt: true };
         logText = logText || 'رسالة صوتية 🎙️';
     } else if (isImage) {
-        messageContent = { image: fileBuffer, caption: caption || undefined };
+        messageContent = { image: fileBuffer, caption: caption ? whatsappQueue.diversifyTextFingerprint(caption) : undefined };
         logText = caption ? `📷 صورة: ${caption}` : '📷 صورة';
     } else if (isVideo) {
-        messageContent = { video: fileBuffer, caption: caption || undefined };
+        messageContent = { video: fileBuffer, caption: caption ? whatsappQueue.diversifyTextFingerprint(caption) : undefined };
         logText = caption ? `🎥 فيديو: ${caption}` : '🎥 فيديو';
     } else {
         const fileName = path.basename(filePath);
-        messageContent = { document: fileBuffer, mimetype: mimetype || 'application/octet-stream', fileName: fileName, caption: caption || undefined };
+        messageContent = { document: fileBuffer, mimetype: mimetype || 'application/octet-stream', fileName: fileName, caption: caption ? whatsappQueue.diversifyTextFingerprint(caption) : undefined };
         logText = caption ? `📄 مستند: ${caption} (${fileName})` : `📄 مستند: ${fileName}`;
     }
 
-    const sentMsg = await sendHumanMessage(sock, remoteJid, messageContent, { userId });
+    // إشارة للحالة (recording / composing)
+    const presence = isAudio ? 'recording' : 'composing';
+    try {
+        await sock.sendPresenceUpdate(presence, remoteJid);
+    } catch (pErr) {}
+
+    // إرسال فوري ومباشر
+    const sentMsg = await sock.sendMessage(remoteJid, messageContent);
+
+    if (sentMsg?.key?.id) {
+        recentSystemMsgIds.add(sentMsg.key.id);
+        setTimeout(() => {
+            recentSystemMsgIds.delete(sentMsg.key.id);
+        }, 120000);
+    }
+
+    try {
+        await sock.sendPresenceUpdate('paused', remoteJid);
+    } catch (e) {}
 
     let relativeUrl = filePath;
     if (filePath.includes('public')) {

@@ -491,7 +491,12 @@
             if (msg.role !== 'user') {
                 const pendingKey = msg.media_url ? msg.media_url.trim() : content;
                 if (pendingKey && pendingLocalMessages.has(pendingKey)) {
-                    pendingLocalMessages.delete(pendingKey);
+                    const count = pendingLocalMessages.get(pendingKey) || 1;
+                    if (count > 1) {
+                        pendingLocalMessages.set(pendingKey, count - 1);
+                    } else {
+                        pendingLocalMessages.delete(pendingKey);
+                    }
                     return; // تم عرضها مسبقاً محلياً، لا نكررها
                 }
             }
@@ -749,26 +754,31 @@
     }
 
     async function sendMsg() {
-        if (isSendingMsg) return;
         const inp = document.getElementById('lcIn');
         const txt = inp.value.trim();
         if (!txt || !curJid) return;
 
+        // منع إرسال نفس الرسالة مرتين بالضغط السريع المزدوج (350ms Debounce)
+        if (isSendingMsg) return;
         isSendingMsg = true;
-        const sendBtn = document.querySelector('.btn-ls');
-        const origBtnContent = sendBtn ? sendBtn.innerHTML : '';
-        if (sendBtn) {
-            sendBtn.disabled = true;
-            sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" style="width:14px; height:14px;"></span>';
-        }
-        inp.disabled = true;
+        setTimeout(() => { isSendingMsg = false; }, 350);
 
-        // تسجيل النص محلياً لمنع تكراره عند وصول بث السوكيت
-        pendingLocalMessages.set(txt, Date.now());
-        setTimeout(() => pendingLocalMessages.delete(txt), 45000);
+        // تفريغ خانة الإدخال فوراً وإبقاؤها مفعلة ومحددة ليكتب الموظف الرسالة التالية دون انتظار
+        inp.value = '';
+        inp.style.height = 'auto';
+        inp.focus();
 
-        inp.value = ''; inp.style.height = 'auto';
+        // إضافة فقاعة الرسالة فوراً على الشاشة
         addBbl(txt, false, new Date());
+
+        // تسجيلها في العداد المحلي لمنع تكرار العرض عند استقبال بث السوكيت
+        const curCount = pendingLocalMessages.get(txt) || 0;
+        pendingLocalMessages.set(txt, curCount + 1);
+        setTimeout(() => {
+            const c = pendingLocalMessages.get(txt) || 0;
+            if (c <= 1) pendingLocalMessages.delete(txt);
+            else pendingLocalMessages.set(txt, c - 1);
+        }, 45000);
 
         try {
             const r = await fetch('/dashboard/livechat/send', {
@@ -779,20 +789,16 @@
             const d = await r.json();
             if (!d.success) {
                 alert('فشل إرسال الرسالة: ' + (d.error || 'خطأ'));
-                pendingLocalMessages.delete(txt);
+                const c = pendingLocalMessages.get(txt) || 0;
+                if (c <= 1) pendingLocalMessages.delete(txt);
+                else pendingLocalMessages.set(txt, c - 1);
             }
         } catch (err) {
             console.error('Send error:', err);
             alert('حدث خطأ في الاتصال أثناء إرسال الرسالة');
-            pendingLocalMessages.delete(txt);
-        } finally {
-            isSendingMsg = false;
-            if (sendBtn) {
-                sendBtn.disabled = false;
-                sendBtn.innerHTML = origBtnContent || '<i class="bi bi-send-fill"></i>';
-            }
-            inp.disabled = false;
-            inp.focus();
+            const c = pendingLocalMessages.get(txt) || 0;
+            if (c <= 1) pendingLocalMessages.delete(txt);
+            else pendingLocalMessages.set(txt, c - 1);
         }
     }
 
@@ -858,7 +864,15 @@
                 cancelMediaPreview();
                 if (data.message) {
                     const mediaKey = data.message.media_url ? data.message.media_url.trim() : (data.message.content || '');
-                    if (mediaKey) pendingLocalMessages.set(mediaKey, Date.now());
+                    if (mediaKey) {
+                        const curCount = pendingLocalMessages.get(mediaKey) || 0;
+                        pendingLocalMessages.set(mediaKey, curCount + 1);
+                        setTimeout(() => {
+                            const c = pendingLocalMessages.get(mediaKey) || 0;
+                            if (c <= 1) pendingLocalMessages.delete(mediaKey);
+                            else pendingLocalMessages.set(mediaKey, c - 1);
+                        }, 45000);
+                    }
                     addBbl(data.message.content, false, new Date(data.message.createdAt), data.message.media_url);
                 }
             } else {
