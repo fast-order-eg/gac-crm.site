@@ -3888,13 +3888,10 @@ export async function sendManualMessage(userId, remoteJid, text) {
         await sock.sendPresenceUpdate('composing', remoteJid);
     } catch (pErr) {}
 
-    // 3. تنويع بصمة النص لمنع تطابق الهاش
-    const diversifiedText = whatsappQueue.diversifyTextFingerprint(text);
+    // 3. إرسال فوري ومباشر إلى واتساب بالنص الطبيعي الصافي
+    const sentMsg = await sock.sendMessage(remoteJid, { text });
 
-    // 4. إرسال فوري ومباشر إلى واتساب دون الدخول في طابور المحاكاة البطيء
-    const sentMsg = await sock.sendMessage(remoteJid, { text: diversifiedText });
-
-    // 5. تسجيل معرّف الرسالة فوراً في recentSystemMsgIds لمنع التكرار ومعالجتها كرسالة واردة
+    // 4. تسجيل معرّف الرسالة فوراً في recentSystemMsgIds لمنع التكرار ومعالجتها كرسالة واردة
     if (sentMsg?.key?.id) {
         recentSystemMsgIds.add(sentMsg.key.id);
         setTimeout(() => {
@@ -3902,12 +3899,12 @@ export async function sendManualMessage(userId, remoteJid, text) {
         }, 120000);
     }
 
-    // 6. إيقاف حالة الكتابة
+    // 5. إيقاف حالة الكتابة
     try {
         await sock.sendPresenceUpdate('paused', remoteJid);
     } catch (e) {}
 
-    // 7. حفظ الرسالة في قاعدة البيانات مع معرّفها
+    // 6. حفظ الرسالة في قاعدة البيانات مع معرّفها
     const savedMsg = await Message.create({
         UserId: userId,
         remoteJid,
@@ -3917,7 +3914,7 @@ export async function sendManualMessage(userId, remoteJid, text) {
         status: 'sent'
     });
     
-    // 8. تحديث المحادثة
+    // 7. تحديث المحادثة
     await Conversation.update(
         { lastMessageText: text, lastMessageAt: new Date() },
         { where: { UserId: userId, remoteJid } }
@@ -3943,14 +3940,14 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
         messageContent = { audio: fileBuffer, mimetype: mimetype || 'audio/ogg; codecs=opus', ptt: true };
         logText = logText || 'رسالة صوتية 🎙️';
     } else if (isImage) {
-        messageContent = { image: fileBuffer, caption: caption ? whatsappQueue.diversifyTextFingerprint(caption) : undefined };
+        messageContent = { image: fileBuffer, caption: caption || undefined };
         logText = caption ? `📷 صورة: ${caption}` : '📷 صورة';
     } else if (isVideo) {
-        messageContent = { video: fileBuffer, caption: caption ? whatsappQueue.diversifyTextFingerprint(caption) : undefined };
+        messageContent = { video: fileBuffer, caption: caption || undefined };
         logText = caption ? `🎥 فيديو: ${caption}` : '🎥 فيديو';
     } else {
         const fileName = path.basename(filePath);
-        messageContent = { document: fileBuffer, mimetype: mimetype || 'application/octet-stream', fileName: fileName, caption: caption ? whatsappQueue.diversifyTextFingerprint(caption) : undefined };
+        messageContent = { document: fileBuffer, mimetype: mimetype || 'application/octet-stream', fileName: fileName, caption: caption || undefined };
         logText = caption ? `📄 مستند: ${caption} (${fileName})` : `📄 مستند: ${fileName}`;
     }
 

@@ -87,30 +87,8 @@ class WhatsAppQueue {
      */
     diversifyTextFingerprint(text) {
         if (!text || typeof text !== 'string') return text;
-
-        let result = text;
-
-        // 1. إدراج محرف غير مرئي عشوائي عند بعض المسافات بين الكلمات
-        const words = result.split(' ');
-        if (words.length > 2) {
-            const insertions = Math.min(3, Math.floor(words.length / 2));
-            for (let i = 0; i < insertions; i++) {
-                const randomIndex = Math.floor(Math.random() * (words.length - 1));
-                const randChar = INVISIBLE_CHARS[Math.floor(Math.random() * INVISIBLE_CHARS.length)];
-                words[randomIndex] = words[randomIndex] + randChar;
-            }
-            result = words.join(' ');
-        }
-
-        // 2. إضافة سلسلة فريدة غير مرئية في نهاية الرسالة لتغيير الطول والهاش الكلي
-        const suffixCount = Math.floor(Math.random() * 4) + 2; // 2 إلى 5 محارف غير مرئية
-        let invisibleSuffix = '';
-        for (let i = 0; i < suffixCount; i++) {
-            invisibleSuffix += INVISIBLE_CHARS[Math.floor(Math.random() * INVISIBLE_CHARS.length)];
-        }
-        const trailingSpaces = ' '.repeat(Math.floor(Math.random() * 2)); // 0 أو 1 مسافة
-
-        return result + invisibleSuffix + trailingSpaces;
+        // إرجاع النص الصافي 100% لمنع تشويه الحروف والكلمات العربية (مثل إطالة النون أو الياء أو كسر الحروف)
+        return text;
     }
 
     /**
