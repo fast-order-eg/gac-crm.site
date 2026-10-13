@@ -1190,7 +1190,7 @@ router.post('/livechat/send', async (req, res) => {
         const lastSent = recentManualSendCache.get(debounceKey);
         if (lastSent && Date.now() - lastSent < 3000) {
             console.log(`⚠️ [Anti-Duplicate] منع إرسال رسالة مكررة في غضون 3 ثوانٍ لنفس العميل: "${text}"`);
-            return res.json({ success: true, message: { content: text } });
+            return res.json({ success: true, duplicate: true, message: { id: null, content: text } });
         }
         recentManualSendCache.set(debounceKey, Date.now());
         setTimeout(() => recentManualSendCache.delete(debounceKey), 10000);
@@ -1221,8 +1221,9 @@ router.post('/livechat/send', async (req, res) => {
                 phoneNumber: customer.phoneNumber || null,
                 customerName: customer.customerName || null
             };
-            io.to(`user_${customer.UserId}`).emit('new_message', payload);
-            io.to('crm_staff').emit('new_message', payload);
+            let emitter = io.to('crm_staff');
+            if (customer.UserId) emitter = emitter.to(`user_${customer.UserId}`);
+            emitter.emit('new_message', payload);
         }
 
         // تسجيل رد الموظف وسرعة الاستجابة في نظام الـ KPI تلقائياً
@@ -1309,8 +1310,9 @@ router.post('/livechat/send-media', (req, res, next) => {
                 phoneNumber: customer?.phoneNumber || conv?.phoneNumber || null,
                 customerName: customer?.customerName || conv?.customerName || null
             };
-            io.to(`user_${botUserId}`).emit('new_message', payload);
-            io.to('crm_staff').emit('new_message', payload);
+            let emitter = io.to('crm_staff');
+            if (botUserId) emitter = emitter.to(`user_${botUserId}`);
+            emitter.emit('new_message', payload);
         }
 
         if (customer) {
@@ -1357,8 +1359,9 @@ router.post('/livechat/react', async (req, res) => {
 
         const io = req.app.get('socketio');
         if (io) {
-            io.to(`user_${botUserId}`).emit('message_reaction', reactionResult);
-            io.to('crm_staff').emit('message_reaction', reactionResult);
+            let emitter = io.to('crm_staff');
+            if (botUserId) emitter = emitter.to(`user_${botUserId}`);
+            emitter.emit('message_reaction', reactionResult);
         }
 
         res.json({ success: true, ...reactionResult });
@@ -1383,8 +1386,9 @@ router.post('/livechat/handoff', async (req, res) => {
         if (io) {
             const updatedConv = await Conversation.findOne({ where: { UserId: targetUserId, remoteJid } });
             if (updatedConv) {
-                io.to(`user_${targetUserId}`).emit('conversation_updated', updatedConv);
-                io.to('crm_staff').emit('conversation_updated', updatedConv);
+                let emitter = io.to('crm_staff');
+                if (targetUserId) emitter = emitter.to(`user_${targetUserId}`);
+                emitter.emit('conversation_updated', updatedConv);
             }
         }
 

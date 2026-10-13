@@ -56,8 +56,9 @@ export function broadcastNewMessage(io, userId, payload) {
     if (!io) return;
     try {
         const msgData = payload?.toJSON ? payload.toJSON() : payload;
-        if (userId) io.to(`user_${userId}`).emit('new_message', msgData);
-        io.to('crm_staff').emit('new_message', msgData);
+        let emitter = io.to('crm_staff');
+        if (userId) emitter = emitter.to(`user_${userId}`);
+        emitter.emit('new_message', msgData);
     } catch (e) {
         console.error('⚠️ [broadcastNewMessage] Error:', e.message);
     }
@@ -1889,8 +1890,9 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                             remoteJid: targetDbMsg.remoteJid,
                             reaction: emojiText
                         };
-                        io.to(`user_${userId}`).emit('message_reaction', reactionPayload);
-                        io.to('crm_staff').emit('message_reaction', reactionPayload);
+                        let emitter = io.to('crm_staff');
+                        if (userId) emitter = emitter.to(`user_${userId}`);
+                        emitter.emit('message_reaction', reactionPayload);
                     }
                 }
                 continue;
@@ -2006,10 +2008,13 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         phoneNumber: phoneNumber || null,
                         customerName: customer?.customerName || phoneNumber || null
                     };
-                    io.to(`user_${userId}`).emit('new_message', payload);
-                    io.to('crm_staff').emit('new_message', payload);
-                    io.to(`user_${userId}`).emit('conversation_updated', conv);
-                    io.to('crm_staff').emit('conversation_updated', conv);
+                    let mEmitter = io.to('crm_staff');
+                    if (userId) mEmitter = mEmitter.to(`user_${userId}`);
+                    mEmitter.emit('new_message', payload);
+
+                    let cEmitter = io.to('crm_staff');
+                    if (userId) cEmitter = cEmitter.to(`user_${userId}`);
+                    cEmitter.emit('conversation_updated', conv);
                 }
 
                 // 7. احتساب سرعة الاستجابة في نظام الـ KPI للموظف المسئول
@@ -2085,8 +2090,9 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                         remoteJid,
                         reaction: emojiText
                     };
-                    io.to(`user_${userId}`).emit('message_reaction', reactionPayload);
-                    io.to('crm_staff').emit('message_reaction', reactionPayload);
+                    let emitter = io.to('crm_staff');
+                    if (userId) emitter = emitter.to(`user_${userId}`);
+                    emitter.emit('message_reaction', reactionPayload);
                 }
             }
             return;

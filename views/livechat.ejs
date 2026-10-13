@@ -908,6 +908,13 @@
 
             const isCurrentChatOpen = isCurrentChat(msg.remoteJid, phone);
             if (isCurrentChatOpen) {
+                const box = document.getElementById('lcMsgs');
+
+                // 1. هل الرسالة موجودة بالفعل في الشات بمعرفها؟ (منع أي تكرار)
+                if (msg.id && box && box.querySelector(`.lc-bbl[data-mid="${msg.id}"]`)) {
+                    return;
+                }
+
                 if (msg.role !== 'user') {
                     const pendingKey = msg.media_url ? msg.media_url.trim() : content;
                     if (pendingKey && pendingLocalMessages.has(pendingKey)) {
@@ -917,23 +924,25 @@
                         } else {
                             pendingLocalMessages.delete(pendingKey);
                         }
-                        // تحديث الفقاعة المحلية الأخيرة بمعرفها الحقيقي لإتاحة الرد والتفاعل
-                        const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
-                        if (unassignedBbl && msg.id) {
-                            unassignedBbl.dataset.mid = msg.id;
-                            if (!unassignedBbl.querySelector('.bbl-action-group')) {
-                                const actDiv = document.createElement('div');
-                                actDiv.className = 'bbl-action-group';
-                                actDiv.innerHTML = `
-                                    <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${msg.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
-                                    <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${msg.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
-                                `;
-                                unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
-                            }
+                    }
+
+                    // البحث عن أي فقاعة محلية صادرة بدون معرف لربطها بدلاً من إنشاء فقاعة مكررة
+                    const unassignedBbl = box ? Array.from(box.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop() : null;
+                    if (unassignedBbl && msg.id) {
+                        unassignedBbl.dataset.mid = msg.id;
+                        if (!unassignedBbl.querySelector('.bbl-action-group')) {
+                            const actDiv = document.createElement('div');
+                            actDiv.className = 'bbl-action-group';
+                            actDiv.innerHTML = `
+                                <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${msg.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                                <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${msg.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+                            `;
+                            unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
                         }
                         return;
                     }
                 }
+
                 const quotedInfo = msg.quotedContent ? {
                     id: msg.quotedMsgId,
                     content: msg.quotedContent,
@@ -1199,6 +1208,12 @@
         if (!txt && !mediaUrl) return;
         const box = document.getElementById('lcMsgs');
         if (!box) return;
+
+        // 🛑 حماية قطعية: لو الرسالة موجودة بالفعل بنفس الـ ID، نمنع إضافتها تماماً
+        if (msgId && box.querySelector(`.lc-bbl[data-mid="${msgId}"]`)) {
+            return;
+        }
+
         if (date) ensureDateDivider(date);
         const d = document.createElement('div');
         d.className = `lc-bbl ${isIn ? 'bbl-in' : 'bbl-out'}`;
@@ -1502,7 +1517,6 @@
         // منع الإرسال المزدوج
         if (isSendingMsg) return;
         isSendingMsg = true;
-        setTimeout(() => { isSendingMsg = false; }, 400);
 
         const sendBtn = document.getElementById('btnSendMain') || document.querySelector('.btn-ls');
         const originalBtnHtml = sendBtn ? sendBtn.innerHTML : '<i class="bi bi-send-fill"></i>';
@@ -1557,15 +1571,20 @@
                                 else pendingLocalMessages.set(mediaKey, c - 1);
                             }, 45000);
                         }
+                        const msgId = data.message.id;
+                        const alreadyTagged = msgId ? document.querySelector(`.lc-bbl[data-mid="${msgId}"]`) : null;
                         const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
-                        if (unassignedBbl && data.message.id) {
-                            unassignedBbl.dataset.mid = data.message.id;
+
+                        if (alreadyTagged && unassignedBbl && alreadyTagged !== unassignedBbl) {
+                            unassignedBbl.remove();
+                        } else if (unassignedBbl && msgId) {
+                            unassignedBbl.dataset.mid = msgId;
                             if (!unassignedBbl.querySelector('.bbl-action-group')) {
                                 const actDiv = document.createElement('div');
                                 actDiv.className = 'bbl-action-group';
                                 actDiv.innerHTML = `
-                                    <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${data.message.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
-                                    <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${data.message.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+                                    <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${msgId}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                                    <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${msgId}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
                                 `;
                                 unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
                             }
@@ -1573,15 +1592,20 @@
                     }
                 } else {
                     alert('فشل إرسال المرفق: ' + (data.error || 'خطأ في الخادم'));
+                    const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+                    if (unassignedBbl) unassignedBbl.remove();
                 }
             } catch (err) {
                 console.error('Media upload error:', err);
                 alert('حدث خطأ في الاتصال أثناء إرسال المرفق');
+                const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+                if (unassignedBbl) unassignedBbl.remove();
             } finally {
                 if (sendBtn) {
                     sendBtn.disabled = false;
                     sendBtn.innerHTML = originalBtnHtml;
                 }
+                isSendingMsg = false;
                 inp.focus();
             }
             return;
@@ -1592,7 +1616,11 @@
         cancelReply();
         inp.value = '';
         inp.style.height = 'auto';
-        inp.focus();
+
+        if (sendBtn) {
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+        }
 
         const localQuoted = replyToSend ? {
             id: replyToSend.id,
@@ -1621,21 +1649,30 @@
             });
             const d = await r.json();
             if (d.success && d.message) {
+                const msgId = d.message.id;
+                const alreadyTagged = msgId ? document.querySelector(`.lc-bbl[data-mid="${msgId}"]`) : null;
                 const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
-                if (unassignedBbl && d.message.id) {
-                    unassignedBbl.dataset.mid = d.message.id;
+
+                if (alreadyTagged && unassignedBbl && alreadyTagged !== unassignedBbl) {
+                    unassignedBbl.remove();
+                } else if (unassignedBbl && msgId) {
+                    unassignedBbl.dataset.mid = msgId;
                     if (!unassignedBbl.querySelector('.bbl-action-group')) {
                         const actDiv = document.createElement('div');
                         actDiv.className = 'bbl-action-group';
                         actDiv.innerHTML = `
-                            <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${d.message.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
-                            <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${d.message.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+                            <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${msgId}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                            <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${msgId}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
                         `;
                         unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
                     }
+                } else if (d.duplicate && unassignedBbl) {
+                    unassignedBbl.remove();
                 }
             } else if (!d.success) {
                 alert('فشل إرسال الرسالة: ' + (d.error || 'خطأ'));
+                const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+                if (unassignedBbl) unassignedBbl.remove();
                 const c = pendingLocalMessages.get(txt) || 0;
                 if (c <= 1) pendingLocalMessages.delete(txt);
                 else pendingLocalMessages.set(txt, c - 1);
@@ -1643,9 +1680,18 @@
         } catch (err) {
             console.error('Send error:', err);
             alert('حدث خطأ في الاتصال أثناء إرسال الرسالة');
+            const unassignedBbl = Array.from(document.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+            if (unassignedBbl) unassignedBbl.remove();
             const c = pendingLocalMessages.get(txt) || 0;
             if (c <= 1) pendingLocalMessages.delete(txt);
             else pendingLocalMessages.set(txt, c - 1);
+        } finally {
+            if (sendBtn) {
+                sendBtn.disabled = false;
+                sendBtn.innerHTML = originalBtnHtml;
+            }
+            isSendingMsg = false;
+            inp.focus();
         }
     }
 
@@ -1667,7 +1713,26 @@
                         const existingMids = new Set(Array.from(box.querySelectorAll('.lc-bbl[data-mid]')).map(el => el.dataset.mid));
                         let hasNew = false;
                         d.messages.forEach(m => {
-                            if (!existingMids.has(String(m.id))) {
+                            if (!existingMids.has(String(m.id)) && !box.querySelector(`.lc-bbl[data-mid="${m.id}"]`)) {
+                                // فحص هل توجد فقاعة محلية صادرة غير مسجلة بالـ ID بعد
+                                if (m.role !== 'user') {
+                                    const unassignedBbl = Array.from(box.querySelectorAll('.lc-bbl.bbl-out:not([data-mid])')).pop();
+                                    if (unassignedBbl) {
+                                        unassignedBbl.dataset.mid = m.id;
+                                        existingMids.add(String(m.id));
+                                        if (!unassignedBbl.querySelector('.bbl-action-group')) {
+                                            const actDiv = document.createElement('div');
+                                            actDiv.className = 'bbl-action-group';
+                                            actDiv.innerHTML = `
+                                                <button type="button" class="bbl-act-btn" onclick="triggerReply(event, '${m.id}')" title="رد"><i class="bi bi-reply-fill"></i></button>
+                                                <button type="button" class="bbl-act-btn" onclick="openReactionPicker(event, '${m.id}')" title="تفاعل"><i class="bi bi-emoji-smile"></i></button>
+                                            `;
+                                            unassignedBbl.insertBefore(actDiv, unassignedBbl.firstChild);
+                                        }
+                                        return;
+                                    }
+                                }
+
                                 let content = m.content ? m.content.replace(/\[M:\d+\]/g, '').trim() : '';
                                 const quotedInfo = m.quotedContent ? {
                                     id: m.quotedMsgId,
