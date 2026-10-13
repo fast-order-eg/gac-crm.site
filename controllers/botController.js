@@ -20,6 +20,7 @@ import TeachMessage from '../models/TeachMessage.js';
 import ChangeLog from '../models/ChangeLog.js';
 import Campaign from '../models/Campaign.js';
 import SystemSettings from '../models/SystemSettings.js';
+import FollowUp from '../models/FollowUp.js';
 import * as notificationService from '../services/notificationService.js';
 import { Op, Sequelize } from 'sequelize';
 import { GoogleAuth } from 'google-auth-library';
@@ -2554,6 +2555,10 @@ export const startSession = async (userId, io, phoneNumber = null) => {
 
             if (!isNewCustomerRecord) {
                 customer.lastReplyAt = new Date();
+                // إلغاء أي متابعة آلية مجدولة عند رد العميل وتفاعله
+                if (customer.scheduledFollowUpAt) {
+                    customer.scheduledFollowUpAt = null;
+                }
                 if (pushName && pushName !== customerPhone && (!customer.customerName || customer.customerName === customerPhone)) {
                     customer.customerName = pushName;
                 }
@@ -2561,6 +2566,15 @@ export const startSession = async (userId, io, phoneNumber = null) => {
                     customer.remoteJid = remoteJid;
                 }
                 await customer.save();
+
+                try {
+                    await FollowUp.update(
+                        { status: 'replied', repliedAt: new Date() },
+                        { where: { CustomerId: customer.id, status: 'pending' } }
+                    );
+                } catch (fuErr) {
+                    console.error('Error updating pending follow-ups to replied:', fuErr);
+                }
             }
 
             // تسجيل استلام رسالة للموظف المخصص في نظام الـ KPI تلقائياً
@@ -3398,69 +3412,9 @@ export const checkInactivitySummary = async () => {
 };
 
 export const checkScheduledFollowUps = async (io) => {
-    try {
-        const now = new Date();
-        const dueCustomers = await Customer.findAll({
-            where: {
-                status: 'scheduled_follow_up',
-                scheduledFollowUpAt: {
-                    [Op.lte]: now
-                }
-            }
-        });
-
-        for (const customer of dueCustomers) {
-            try {
-                const ownerId = customer.UserId;
-                const assignedUserId = customer.assignedToUserId;
-                const customerPhone = customer.remoteJid;
-
-                // 1. Update Customer status to final_follow_up to avoid triggering again
-                const oldStatus = customer.status;
-                customer.status = 'final_follow_up';
-                // customer.scheduledFollowUpAt = null; // We can leave it so they know when it was scheduled for
-                await customer.save();
-
-                // 2. Log in ChangeLog
-                await ChangeLog.create({
-                    action: 'status_change',
-                    description: `موعد المتابعة حان. تم إرسال تذكير تلقائي وتغيير الحالة إلى "متابعة نهائية"`,
-                    oldValue: oldStatus,
-                    newValue: 'final_follow_up',
-                    CustomerId: customer.id,
-                    performedByUserId: ownerId, // System essentially, attribute to owner
-                    UserId: ownerId
-                });
-
-                // 3. Send automated WhatsApp message to customer
-                const sock = sessions.get(ownerId);
-                if (sock && customerPhone) {
-                    const messageText = `أهلاً بك ${customer.customerName || ''}، بناءً على طلبك نذكرك بموعد المتابعة. هل أنت متاح الآن للحديث؟`;
-                    await sendHumanMessage(sock, customerPhone, { text: messageText }, { userId: ownerId });
-                }
-
-                // 4. Send internal notification to assigned employee or owner
-                const targetUserId = assignedUserId || ownerId;
-                if (targetUserId) {
-                    await notificationService.createNotification({
-                        type: 'follow_up_due',
-                        title: 'متابعة مستحقة',
-                        message: `حان موعد متابعة العميل: ${customer.customerName || customer.phoneNumber}`,
-                        targetUserId: targetUserId,
-                        customerId: customer.id,
-                        ownerId: ownerId,
-                        io: io
-                    });
-                }
-                
-                console.log(`[FollowUpCron] Processed follow up for customer ${customer.id}`);
-            } catch (innerErr) {
-                console.error(`[FollowUpCron] Error processing customer ${customer.id}:`, innerErr);
-            }
-        }
-    } catch (err) {
-        console.error('[FollowUpCron] Global Error:', err);
-    }
+    // تم نقل معالجة المتابعات المجدولة بالكامل وبشكل موحد إلى services/followUpService.js
+    const { checkScheduledFollowUps: runCheck } = await import('../services/followUpService.js');
+    return runCheck(io);
 };
 
 export function matchImages(instructions, userText, replyText) {

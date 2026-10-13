@@ -2914,8 +2914,8 @@ router.post('/customers/update-status', async (req, res) => {
         customer.status = status;
         if (status === 'successful') {
             customer.completedAt = new Date();
-        }
-        if (status === 'first_follow_up') {
+            customer.scheduledFollowUpAt = null;
+        } else if (status === 'first_follow_up') {
             const firstFollowupDelay = await getSetting('first_followup_delay', customer.UserId);
             const firstFollowupDelayUnit = await getSetting('first_followup_delay_unit', customer.UserId) || 'hours';
             const firstFollowupDelayMs = firstFollowupDelayUnit === 'hours'
@@ -2929,6 +2929,8 @@ router.post('/customers/update-status', async (req, res) => {
                 ? finalFollowupDelay * 60 * 60 * 1000
                 : finalFollowupDelay * 60 * 1000;
             customer.scheduledFollowUpAt = new Date(Date.now() + finalFollowupDelayMs);
+        } else if (status !== 'scheduled_follow_up') {
+            customer.scheduledFollowUpAt = null;
         }
 
         await customer.save();

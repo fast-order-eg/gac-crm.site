@@ -199,30 +199,40 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3005;
 
 // --- Scheduled Cron Jobs ---
-// Run bot cron jobs
+// Run bot cron jobs with overlap protection (Mutex Guard)
+let isCronRunning = false;
 cron.schedule('* * * * *', async () => {
-    try {
-        await checkScheduledFollowUps(io);
-    } catch (e) {
-        console.error('[Cron Error] checkScheduledFollowUps:', e.message);
+    if (isCronRunning) {
+        console.log('⏳ [Cron Mutex] Previous minute cron tasks still running. Skipping this tick to prevent duplicate execution.');
+        return;
     }
-
+    isCronRunning = true;
     try {
-        await checkPendingFollowUps(io);
-    } catch (e) {
-        console.error('[Cron Error] checkPendingFollowUps:', e.message);
-    }
+        try {
+            await checkScheduledFollowUps(io);
+        } catch (e) {
+            console.error('[Cron Error] checkScheduledFollowUps:', e.message);
+        }
 
-    try {
-        await checkNoActionCustomers(io);
-    } catch (e) {
-        console.error('[Cron Error] checkNoActionCustomers:', e.message);
-    }
+        try {
+            await checkPendingFollowUps(io);
+        } catch (e) {
+            console.error('[Cron Error] checkPendingFollowUps:', e.message);
+        }
 
-    try {
-        await checkScheduledCampaigns(io);
-    } catch (e) {
-        console.error('[Cron Error] checkScheduledCampaigns:', e.message);
+        try {
+            await checkNoActionCustomers(io);
+        } catch (e) {
+            console.error('[Cron Error] checkNoActionCustomers:', e.message);
+        }
+
+        try {
+            await checkScheduledCampaigns(io);
+        } catch (e) {
+            console.error('[Cron Error] checkScheduledCampaigns:', e.message);
+        }
+    } finally {
+        isCronRunning = false;
     }
 });
 

@@ -8,7 +8,17 @@ import { getSetting as getSystemSetting } from './settingsService.js';
 import * as notificationService from './notificationService.js';
 import { sessions, generateDynamicFollowUpMessage, sendHumanMessage } from '../controllers/botController.js';
 
+// 🔒 أقفال لمنع تداخل وتشغيل الدورات بشكل متزامن داخل نفس العملية
+let isCheckingPendingFollowUps = false;
+let isCheckingScheduledFollowUps = false;
+
 export const checkPendingFollowUps = async (io) => {
+    if (isCheckingPendingFollowUps) {
+        console.log('⏳ [FollowUpService] checkPendingFollowUps already in progress. Skipping duplicate tick.');
+        return;
+    }
+    isCheckingPendingFollowUps = true;
+
     try {
         const now = new Date();
         const activeUsers = await User.findAll({ where: { auto_reply: true } });
@@ -39,6 +49,17 @@ export const checkPendingFollowUps = async (io) => {
 
             for (const customer of silentCustomers) {
                 try {
+                    // حماية: إذا كان العميل قد أُرسلت له متابعة سابقة ولم يقم بالرد بعدها إطلاقاً، فلا نعيد جدولته مجدداً
+                    const lastSentFollowUp = await FollowUp.findOne({
+                        where: { CustomerId: customer.id, status: 'sent' },
+                        order: [['sentAt', 'DESC']]
+                    });
+                    if (lastSentFollowUp) {
+                        if (!customer.lastReplyAt || customer.lastReplyAt <= lastSentFollowUp.sentAt) {
+                            continue; // العميل لم يرد بعد آخر متابعة، نتركه ولا نعيد إدخاله في دورة متابعة جديدة
+                        }
+                    }
+
                     const oldStatus = customer.status;
                     customer.status = 'first_follow_up';
                     
@@ -81,7 +102,7 @@ export const checkPendingFollowUps = async (io) => {
                 console.log(`🌙 [FollowUp Anti-Ban] وقت الهدوء الليلي (${cairoHour}:00 بتوقيت القاهرة). تأجيل إرسال رسائل المتابعة للصباح لمنع الإزعاج والحظر.`);
             }
 
-            // 2. معالجة المتابعات المجدولة للعملاء في حالة "first_follow_up" (فقط خارج ساعات النوم وبحد أقصى 3 عملاء في الدورة الواحدة)
+            // 2. معالجة المتابعات المجدولة للعملاء في حالة "first_follow_up" أو "final_follow_up"
             const scheduledCustomers = isQuietHours ? [] : await Customer.findAll({
                 where: {
                     UserId: userId,
@@ -100,6 +121,15 @@ export const checkPendingFollowUps = async (io) => {
                 limit: 3
             });
 
+            // 🔒 حجز فوري في قاعدة البيانات: تصفير scheduledFollowUpAt لحظياً لمنع التقاط نفس العملاء من أي دورة متوازية أخرى
+            if (scheduledCustomers.length > 0) {
+                const pickedIds = scheduledCustomers.map(c => c.id);
+                await Customer.update(
+                    { scheduledFollowUpAt: null },
+                    { where: { id: { [Op.in]: pickedIds } } }
+                );
+            }
+
             for (let idx = 0; idx < scheduledCustomers.length; idx++) {
                 const customer = scheduledCustomers[idx];
                 // فاصل أمان إضافي بين كل رسالة متابعة والأخرى (20 إلى 35 ثانية) لأنها رسائل إعادة تواصل
@@ -108,8 +138,9 @@ export const checkPendingFollowUps = async (io) => {
                     console.log(`⏳ [FollowUp Anti-Ban] انتظار ${(followUpWait / 1000).toFixed(0)} ثانية قبل إرسال رسالة المتابعة التالية...`);
                     await new Promise(r => setTimeout(r, followUpWait));
                 }
+
                 try {
-                    // التحقق هل تم إرسال المتابعة الأولى للعميل من قبل
+                    // التحقق هل تم إرسال المتابعة الأولى أو النهائية للعميل من قبل
                     const firstFollowupSent = await FollowUp.findOne({
                         where: {
                             CustomerId: customer.id,
@@ -117,8 +148,36 @@ export const checkPendingFollowUps = async (io) => {
                             status: 'sent'
                         }
                     });
+                    const finalFollowupSent = await FollowUp.findOne({
+                        where: {
+                            CustomerId: customer.id,
+                            type: 'final',
+                            status: 'sent'
+                        }
+                    });
 
-                    if (customer.status === 'first_follow_up' && !firstFollowupSent) {
+                    if (customer.status === 'first_follow_up') {
+                        if (firstFollowupSent) {
+                            console.log(`[FollowUpService] ⚠️ First follow-up already sent for ${customer.phoneNumber}. Skipping first follow-up.`);
+                            // إذا لم تكن المتابعة النهائية قد أُرسلت بعد، نقوم بجدولتها
+                            if (!finalFollowupSent) {
+                                const finalFollowupDelay = await getSystemSetting('final_followup_delay', userId);
+                                const finalFollowupDelayUnit = await getSystemSetting('final_followup_delay_unit', userId) || 'hours';
+                                const finalFollowupDelayMs = finalFollowupDelayUnit === 'hours'
+                                    ? finalFollowupDelay * 60 * 60 * 1000
+                                    : finalFollowupDelay * 60 * 1000;
+
+                                customer.status = 'final_follow_up';
+                                customer.scheduledFollowUpAt = new Date(now.getTime() + finalFollowupDelayMs);
+                                await customer.save();
+                            } else {
+                                customer.status = 'final_follow_up';
+                                customer.scheduledFollowUpAt = null;
+                                await customer.save();
+                            }
+                            continue;
+                        }
+
                         // --- إرسال المتابعة الأولى ---
                         const firstFollowupMessage = await getSystemSetting('first_followup_message', userId);
                         const firstFollowupType = await getSystemSetting('first_followup_type', userId) || 'static';
@@ -145,7 +204,7 @@ export const checkPendingFollowUps = async (io) => {
                             type: 'first',
                             status: 'sent',
                             message: customerFirstMsg,
-                            scheduledAt: customer.scheduledFollowUpAt,
+                            scheduledAt: now,
                             sentAt: new Date()
                         });
 
@@ -156,6 +215,7 @@ export const checkPendingFollowUps = async (io) => {
                             ? finalFollowupDelay * 60 * 60 * 1000
                             : finalFollowupDelay * 60 * 1000;
 
+                        customer.status = 'final_follow_up';
                         customer.scheduledFollowUpAt = new Date(now.getTime() + finalFollowupDelayMs);
                         customer.lastBotMessageAt = new Date();
                         await customer.save();
@@ -179,7 +239,15 @@ export const checkPendingFollowUps = async (io) => {
                         });
 
                         console.log(`[FollowUpService] Sent scheduled first follow-up to ${customer.phoneNumber}`);
-                    } else {
+
+                    } else if (customer.status === 'final_follow_up') {
+                        if (finalFollowupSent) {
+                            console.log(`[FollowUpService] ⚠️ Final follow-up already sent for ${customer.phoneNumber}. Skipping duplicate.`);
+                            customer.scheduledFollowUpAt = null;
+                            await customer.save();
+                            continue;
+                        }
+
                         // --- إرسال المتابعة النهائية ---
                         const finalFollowupMessage = await getSystemSetting('final_followup_message', userId);
                         const finalFollowupType = await getSystemSetting('final_followup_type', userId) || 'static';
@@ -206,20 +274,19 @@ export const checkPendingFollowUps = async (io) => {
                             type: 'final',
                             status: 'sent',
                             message: customerFinalMsg,
-                            scheduledAt: customer.scheduledFollowUpAt,
+                            scheduledAt: now,
                             sentAt: new Date()
                         });
 
-                        const oldStatus = customer.status;
                         customer.status = 'final_follow_up';
                         customer.lastBotMessageAt = new Date();
-                        customer.scheduledFollowUpAt = null; // تفريغ الحقل حتى لا يتم تكرار الإرسال
+                        customer.scheduledFollowUpAt = null; // تفريغ الحقل نهائياً حتى لا يتم تكرار الإرسال
                         await customer.save();
 
                         await ChangeLog.create({
                             action: 'status_change',
-                            description: `حان موعد المتابعة النهائية. تم إرسال رسالة العرض وتغيير الحالة إلى "متابعة نهائية".`,
-                            oldValue: oldStatus,
+                            description: `حان موعد المتابعة النهائية. تم إرسال رسالة العرض والمتابعة النهائية.`,
+                            oldValue: 'first_follow_up',
                             newValue: 'final_follow_up',
                             CustomerId: customer.id,
                             performedByUserId: userId,
@@ -237,6 +304,10 @@ export const checkPendingFollowUps = async (io) => {
                         });
 
                         console.log(`[FollowUpService] Sent scheduled final follow-up to ${customer.phoneNumber}`);
+                    } else {
+                        // العميل ليس في حالة متابعة أولى أو نهائية (تم تغيير حالته مثلاً)
+                        customer.scheduledFollowUpAt = null;
+                        await customer.save();
                     }
                 } catch (err) {
                     console.error(`Error processing scheduled follow-up for customer ${customer.id}:`, err);
@@ -264,18 +335,25 @@ export const checkPendingFollowUps = async (io) => {
                 try {
                     const oldStatus = customer.status;
                     customer.status = 'not_interested';
+                    customer.scheduledFollowUpAt = null;
                     await customer.save();
 
-                    // تسجيل انتهاء المهلة في سجل المتابعات
-                    await FollowUp.create({
-                        CustomerId: customer.id,
-                        UserId: userId,
-                        type: 'no_action',
-                        status: 'expired',
-                        message: 'لم يتم الرد بعد المتابعة النهائية بـ 48 ساعة.',
-                        scheduledAt: expireCutoff,
-                        sentAt: new Date()
+                    // التحقق من عدم تسجيل انتهاء المهلة مسبقاً
+                    const existingExpired = await FollowUp.findOne({
+                        where: { CustomerId: customer.id, type: 'no_action', status: 'expired' }
                     });
+
+                    if (!existingExpired) {
+                        await FollowUp.create({
+                            CustomerId: customer.id,
+                            UserId: userId,
+                            type: 'no_action',
+                            status: 'expired',
+                            message: 'لم يتم الرد بعد المتابعة النهائية بـ 48 ساعة.',
+                            scheduledAt: expireCutoff,
+                            sentAt: new Date()
+                        });
+                    }
 
                     await ChangeLog.create({
                         action: 'status_change',
@@ -305,6 +383,8 @@ export const checkPendingFollowUps = async (io) => {
         }
     } catch (error) {
         console.error('Error in checkPendingFollowUps background job:', error);
+    } finally {
+        isCheckingPendingFollowUps = false;
     }
 };
 
@@ -312,6 +392,12 @@ export const checkPendingFollowUps = async (io) => {
  * دالة لفحص المتابعات المجدولة يدوياً بواسطة موظف المبيعات
  */
 export const checkScheduledFollowUps = async (io) => {
+    if (isCheckingScheduledFollowUps) {
+        console.log('⏳ [FollowUpService] checkScheduledFollowUps already running. Skipping.');
+        return;
+    }
+    isCheckingScheduledFollowUps = true;
+
     try {
         const now = new Date();
         const pendingFollowUps = await FollowUp.findAll({
@@ -322,6 +408,15 @@ export const checkScheduledFollowUps = async (io) => {
             },
             include: [{ model: Customer, as: 'customer' }]
         });
+
+        // 🔒 حجز فوري في قاعدة البيانات لتفادي تكرار إرسال نفس المتابعة
+        if (pendingFollowUps.length > 0) {
+            const pIds = pendingFollowUps.map(f => f.id);
+            await FollowUp.update(
+                { status: 'sent', sentAt: now },
+                { where: { id: { [Op.in]: pIds } } }
+            );
+        }
 
         for (const followup of pendingFollowUps) {
             const userId = followup.UserId;
@@ -341,10 +436,6 @@ export const checkScheduledFollowUps = async (io) => {
                         status: 'sent'
                     });
                 }
-
-                followup.status = 'sent';
-                followup.sentAt = new Date();
-                await followup.save();
 
                 await ChangeLog.create({
                     action: 'follow_up',
@@ -369,7 +460,75 @@ export const checkScheduledFollowUps = async (io) => {
                 console.error(`Error sending scheduled follow-up ID ${followup.id}:`, err);
             }
         }
+
+        // 2. فحص العملاء الذين تم تحديد موعد متابعة مجدول لهم عبر واجهة كروت العملاء (status: 'scheduled_follow_up')
+        const dueCustomers = await Customer.findAll({
+            where: {
+                status: 'scheduled_follow_up',
+                scheduledFollowUpAt: {
+                    [Op.ne]: null,
+                    [Op.lte]: now
+                }
+            }
+        });
+
+        if (dueCustomers.length > 0) {
+            const dueIds = dueCustomers.map(c => c.id);
+            // 🔒 حجز فوري بتصفير scheduledFollowUpAt لمنع التكرار
+            await Customer.update(
+                { scheduledFollowUpAt: null },
+                { where: { id: { [Op.in]: dueIds } } }
+            );
+        }
+
+        for (const customer of dueCustomers) {
+            try {
+                const ownerId = customer.UserId;
+                const assignedUserId = customer.assignedToUserId;
+                const customerPhone = customer.remoteJid;
+
+                const oldStatus = customer.status;
+                customer.status = 'final_follow_up';
+                customer.scheduledFollowUpAt = null;
+                await customer.save();
+
+                await ChangeLog.create({
+                    action: 'status_change',
+                    description: `موعد المتابعة حان. تم إرسال تذكير تلقائي وتغيير الحالة إلى "متابعة نهائية"`,
+                    oldValue: oldStatus,
+                    newValue: 'final_follow_up',
+                    CustomerId: customer.id,
+                    performedByUserId: ownerId,
+                    UserId: ownerId
+                });
+
+                const sock = sessions.get(ownerId);
+                if (sock && customerPhone) {
+                    const messageText = `أهلاً بك ${customer.customerName || ''}، بناءً على طلبك نذكرك بموعد المتابعة. هل أنت متاح الآن للحديث؟`;
+                    await sendHumanMessage(sock, customerPhone, { text: messageText }, { userId: ownerId });
+                }
+
+                const targetUserId = assignedUserId || ownerId;
+                if (targetUserId) {
+                    await notificationService.createNotification({
+                        type: 'follow_up_due',
+                        title: 'متابعة مستحقة',
+                        message: `حان موعد متابعة العميل: ${customer.customerName || customer.phoneNumber}`,
+                        targetUserId: targetUserId,
+                        customerId: customer.id,
+                        ownerId: ownerId,
+                        io: io
+                    });
+                }
+
+                console.log(`[FollowUpService] Processed scheduled_follow_up for customer ${customer.id}`);
+            } catch (innerErr) {
+                console.error(`[FollowUpService] Error processing scheduled customer ${customer.id}:`, innerErr);
+            }
+        }
     } catch (error) {
         console.error('Error in checkScheduledFollowUps:', error);
+    } finally {
+        isCheckingScheduledFollowUps = false;
     }
 };
