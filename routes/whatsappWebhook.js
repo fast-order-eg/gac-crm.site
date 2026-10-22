@@ -8,7 +8,6 @@ import User from '../models/User.js';
 import { Op } from 'sequelize';
 import { assignCustomerToSales } from '../services/assignmentService.js';
 import { createNotification } from '../services/notificationService.js';
-import { cancelScheduledFollowUp } from '../services/followUpService.js';
 
 const router = express.Router();
 
@@ -148,8 +147,8 @@ async function processIncomingMetaMessage(msg, contacts = [], io = null) {
                 updated = true;
             }
             customer.lastInteraction = new Date();
+            customer.scheduledFollowUpAt = null;
             await customer.save();
-            await cancelScheduledFollowUp(customer.id);
         }
 
         const targetUserId = customer.UserId || defaultAdminId;
