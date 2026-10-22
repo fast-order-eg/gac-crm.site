@@ -48,6 +48,7 @@ import adminRoutes from './routes/admin.js';
 import apiDashboardRoutes from './routes/api_dashboard.js';
 import dashboardRoutes from './routes/dashboard.js';
 import messengerRoutes from './routes/messenger.js';
+import whatsappWebhookRoutes from './routes/whatsappWebhook.js';
 
 dotenv.config();
 
@@ -173,6 +174,7 @@ app.use('/admin', adminRoutes);
 app.use('/dashboard', dashboardRoutes);
 app.use('/api/bot', apiDashboardRoutes);
 app.use('/', messengerRoutes); // Messenger Webhook + Dashboard routes
+app.use('/', whatsappWebhookRoutes); // WhatsApp Cloud API Webhook routes
 
 app.use((err, req, res, next) => {
     console.error('⚠️ [Server Error Handled] Error:', err.message, 'Code:', err.code, 'Field:', err.field);
