@@ -206,10 +206,14 @@ router.get('/', async (req, res) => {
             ]
         });
 
+        const { getMetaConfig } = await import('../services/metaWhatsappService.js');
+        const metaConfig = await getMetaConfig(req.user.id);
+
         res.render('user_dashboard', {
             user: req.user,
             status: statusResult.status || 'offline',
             phone: statusResult.phone || '',
+            metaConfig,
             page: 'home',
             stats: {
                 successfulCount,

@@ -260,6 +260,8 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+
                     <!-- 3. Meta WhatsApp Cloud API Tab -->
                     <div class="tab-pane fade" id="meta-pane" role="tabpanel" aria-labelledby="meta-tab">
                         <div class="d-flex align-items-center justify-content-between mb-3">
@@ -381,14 +383,23 @@
     <!-- Persistence of active Bootstrap tab across reloads/redirects -->
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            // Restore active tab
-            const activeTabId = localStorage.getItem('activeSettingsTab');
-            if (activeTabId) {
-                const tabEl = document.querySelector(`#settingsTabs button[id="${activeTabId}"]`);
-                if (tabEl) {
-                    const tabTrigger = new bootstrap.Tab(tabEl);
-                    tabTrigger.show();
+            // Restore active tab (Check URL hash first, then localStorage)
+            let tabToActivate = null;
+            if (window.location.hash) {
+                const hash = window.location.hash;
+                tabToActivate = document.querySelector(`#settingsTabs button[data-bs-target="${hash}"]`) || 
+                                document.querySelector(`#settingsTabs button[id="${hash.replace('#', '')}"]`) ||
+                                document.querySelector(`#settingsTabs button${hash}`);
+            }
+            if (!tabToActivate) {
+                const activeTabId = localStorage.getItem('activeSettingsTab');
+                if (activeTabId) {
+                    tabToActivate = document.querySelector(`#settingsTabs button[id="${activeTabId}"]`);
                 }
+            }
+            if (tabToActivate) {
+                const tabTrigger = new bootstrap.Tab(tabToActivate);
+                tabTrigger.show();
             }
 
             // Save active tab on click
