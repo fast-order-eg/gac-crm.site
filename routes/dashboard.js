@@ -2310,9 +2310,19 @@ router.post('/settings/update', async (req, res) => {
         const updates = req.body;
         
         const readOnlyKeys = ['welcome_message', 'course_details', 'free_lectures_url', 'free_lectures_message', 'guarantees_message', 'payment_instructions'];
+        
+        // معالجة مفتاح التفعيل لـ Meta WhatsApp إذا تم إرسال النموذج
+        if (updates.meta_whatsapp_form_submitted === 'true') {
+            const isMetaEnabled = updates.meta_whatsapp_enabled === 'true' || updates.meta_whatsapp_enabled === 'on';
+            await setSetting('meta_whatsapp_enabled', isMetaEnabled, userId);
+        }
+
         for (const [key, value] of Object.entries(updates)) {
             if (readOnlyKeys.includes(key)) {
                 continue;
+            }
+            if (key === 'meta_whatsapp_enabled') {
+                continue; // تم معالجته بالأعلى
             }
             if (defaultSettingsMeta[key] !== undefined) {
                 await setSetting(key, value, userId);
@@ -2325,6 +2335,17 @@ router.post('/settings/update', async (req, res) => {
         console.error('Error updating settings:', err);
         req.flash('error_msg', 'حدث خطأ أثناء حفظ الإعدادات.');
         res.redirect('/dashboard/settings');
+    }
+});
+
+// فحص الاتصال بـ Meta Cloud API
+router.get('/settings/test-meta-connection', async (req, res) => {
+    try {
+        const { testMetaConnection } = await import('../services/metaWhatsappService.js');
+        const result = await testMetaConnection();
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
     }
 });
 

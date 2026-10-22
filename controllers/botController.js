@@ -4077,6 +4077,72 @@ export async function teachBot(userId, userText) {
 // 🛡️ Live Chat & Human Handoff Method (Direct & Instant for Human Staff)
 // ============================================================
 export async function sendManualMessage(userId, remoteJid, text, options = {}) {
+    const isGroup = remoteJid && remoteJid.endsWith('@g.us');
+    let quotedMsg = null;
+    if (options && options.quotedMsgId) {
+        quotedMsg = await Message.findByPk(options.quotedMsgId);
+    }
+
+    // 🌟 1. المسار الأساسي: الإرسال عبر WhatsApp Cloud API للمحادثات الفردية
+    if (!isGroup) {
+        try {
+            const { getMetaConfig, sendMetaTextMessage } = await import('../services/metaWhatsappService.js');
+            const metaConfig = await getMetaConfig(userId);
+            if (metaConfig.enabled && metaConfig.token && metaConfig.phoneNumberId) {
+                const metaQuotedId = (quotedMsg && quotedMsg.messageId) ? quotedMsg.messageId : null;
+                const metaRes = await sendMetaTextMessage(remoteJid, text, { userId, quotedMsgId: metaQuotedId });
+                
+                if (metaRes?.messageId) {
+                    const savedMsg = await Message.create({
+                        UserId: userId,
+                        remoteJid,
+                        role: 'model',
+                        content: text,
+                        messageId: metaRes.messageId,
+                        quotedMsgId: quotedMsg ? quotedMsg.id : null,
+                        quotedContent: quotedMsg ? (quotedMsg.content || (quotedMsg.media_url ? 'مرفق' : '')) : null,
+                        quotedSender: quotedMsg ? (quotedMsg.role === 'model' ? 'أنت' : 'العميل') : null,
+                        status: 'sent'
+                    });
+
+                    // تحديث وقت وتفاصيل المحادثة والعميل
+                    const jidUpdateList = [remoteJid];
+                    if (remoteJid.includes('@')) {
+                        jidUpdateList.push(remoteJid.split('@')[0]);
+                    }
+                    await Conversation.update(
+                        { lastMessage: text, lastMessageText: text, lastMessageTime: new Date(), lastMessageAt: new Date() },
+                        {
+                            where: {
+                                [Op.or]: [
+                                    { remoteJid: { [Op.in]: jidUpdateList } },
+                                    { phoneNumber: { [Op.in]: jidUpdateList } }
+                                ]
+                            }
+                        }
+                    );
+
+                    await Customer.update(
+                        { lastInteraction: new Date() },
+                        {
+                            where: {
+                                [Op.or]: [
+                                    { remoteJid: { [Op.in]: jidUpdateList } },
+                                    { phoneNumber: { [Op.in]: jidUpdateList } }
+                                ]
+                            }
+                        }
+                    );
+
+                    return savedMsg;
+                }
+            }
+        } catch (metaErr) {
+            console.warn('⚠️ [Meta Cloud API] sendManualMessage error, falling back to Baileys:', metaErr.message);
+        }
+    }
+
+    // 🌟 2. المسار الاحتياطي والجروبات عبر جلسة Baileys
     const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
     if (!sock) throw new Error("البوت غير متصل حالياً.");
     
@@ -4094,24 +4160,20 @@ export async function sendManualMessage(userId, remoteJid, text, options = {}) {
     } catch (pErr) {}
 
     // 3. تجهيز الرد المقتبس إن وجد (Quoted Reply)
-    let quotedMsg = null;
     let quoteOptions = undefined;
-    if (options && options.quotedMsgId) {
-        quotedMsg = await Message.findByPk(options.quotedMsgId);
-        if (quotedMsg && quotedMsg.messageId) {
-            quoteOptions = {
-                quoted: {
-                    key: {
-                        remoteJid: quotedMsg.remoteJid || remoteJid,
-                        fromMe: quotedMsg.role === 'model',
-                        id: quotedMsg.messageId
-                    },
-                    message: {
-                        conversation: quotedMsg.content || 'مرفق'
-                    }
+    if (quotedMsg && quotedMsg.messageId) {
+        quoteOptions = {
+            quoted: {
+                key: {
+                    remoteJid: quotedMsg.remoteJid || remoteJid,
+                    fromMe: quotedMsg.role === 'model',
+                    id: quotedMsg.messageId
+                },
+                message: {
+                    conversation: quotedMsg.content || 'مرفق'
                 }
-            };
-        }
+            }
+        };
     }
 
     // 4. إرسال فوري ومباشر إلى واتساب بالنص الطبيعي الصافي
@@ -4153,52 +4215,133 @@ export async function sendManualMessage(userId, remoteJid, text, options = {}) {
 }
 
 export async function sendManualMediaMessage(userId, remoteJid, filePath, mimetype, caption = '', options = {}) {
-    const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
-    if (!sock) throw new Error("البوت غير متصل حالياً.");
+    const isGroup = remoteJid && remoteJid.endsWith('@g.us');
+    let quotedMsg = null;
+    if (options && options.quotedMsgId) {
+        quotedMsg = await Message.findByPk(options.quotedMsgId);
+    }
+
+    let relativeUrl = filePath;
+    const publicDir = path.join(process.cwd(), 'public');
+    if (filePath.startsWith(publicDir)) {
+        relativeUrl = filePath.slice(publicDir.length).replace(/\\/g, '/');
+    } else if (filePath.includes('/uploads/') || filePath.includes('\\uploads\\')) {
+        const idx = filePath.search(/[\\/]uploads[\\/]/);
+        relativeUrl = filePath.substring(idx).replace(/\\/g, '/');
+    } else {
+        const lastPublic = filePath.lastIndexOf('public');
+        if (lastPublic !== -1) {
+            relativeUrl = filePath.substring(lastPublic + 6).replace(/\\/g, '/');
+        }
+    }
+    if (!relativeUrl.startsWith('/')) relativeUrl = '/' + relativeUrl;
 
     const ext = path.extname(filePath).toLowerCase();
     const isAudio = (mimetype && mimetype.startsWith('audio/')) || ['.ogg', '.mp3', '.wav', '.m4a', '.opus'].includes(ext);
     const isImage = (mimetype && mimetype.startsWith('image/')) || ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext);
     const isVideo = (mimetype && mimetype.startsWith('video/')) || ['.mp4', '.mov', '.webm'].includes(ext);
 
-    let messageContent = {};
     let logText = caption || '';
+    if (isAudio) logText = logText || 'رسالة صوتية 🎙️';
+    else if (isImage) logText = caption ? `📷 صورة: ${caption}` : '📷 صورة';
+    else if (isVideo) logText = caption ? `🎥 فيديو: ${caption}` : '🎥 فيديو';
+    else {
+        const fileName = path.basename(filePath);
+        logText = caption ? `📄 مستند: ${caption} (${fileName})` : `📄 مستند: ${fileName}`;
+    }
+
+    // 🌟 1. المسار الأساسي: الإرسال عبر WhatsApp Cloud API للمحادثات الفردية
+    if (!isGroup) {
+        try {
+            const { getMetaConfig, sendMetaMediaMessage: sendMetaMedia } = await import('../services/metaWhatsappService.js');
+            const metaConfig = await getMetaConfig(userId);
+            if (metaConfig.enabled && metaConfig.token && metaConfig.phoneNumberId) {
+                const metaQuotedId = (quotedMsg && quotedMsg.messageId) ? quotedMsg.messageId : null;
+                const metaRes = await sendMetaMedia(remoteJid, relativeUrl, mimetype, caption, { userId, quotedMsgId: metaQuotedId });
+
+                if (metaRes?.messageId) {
+                    const savedMsg = await Message.create({
+                        UserId: userId,
+                        remoteJid,
+                        role: 'model',
+                        content: logText,
+                        media_url: relativeUrl,
+                        messageId: metaRes.messageId,
+                        quotedMsgId: quotedMsg ? quotedMsg.id : null,
+                        quotedContent: quotedMsg ? (quotedMsg.content || (quotedMsg.media_url ? 'مرفق' : '')) : null,
+                        quotedSender: quotedMsg ? (quotedMsg.role === 'model' ? 'أنت' : 'العميل') : null,
+                        status: 'sent'
+                    });
+
+                    const jidUpdateList = [remoteJid];
+                    if (remoteJid.includes('@')) {
+                        jidUpdateList.push(remoteJid.split('@')[0]);
+                    }
+                    await Conversation.update(
+                        { lastMessage: logText, lastMessageText: logText, lastMessageTime: new Date(), lastMessageAt: new Date() },
+                        {
+                            where: {
+                                [Op.or]: [
+                                    { remoteJid: { [Op.in]: jidUpdateList } },
+                                    { phoneNumber: { [Op.in]: jidUpdateList } }
+                                ]
+                            }
+                        }
+                    );
+
+                    await Customer.update(
+                        { lastInteraction: new Date() },
+                        {
+                            where: {
+                                [Op.or]: [
+                                    { remoteJid: { [Op.in]: jidUpdateList } },
+                                    { phoneNumber: { [Op.in]: jidUpdateList } }
+                                ]
+                            }
+                        }
+                    );
+
+                    return savedMsg;
+                }
+            }
+        } catch (metaErr) {
+            console.warn('⚠️ [Meta Cloud API Media] sendManualMediaMessage error, fallback to Baileys:', metaErr.message);
+        }
+    }
+
+    // 🌟 2. المسار الاحتياطي والجروبات عبر جلسة Baileys
+    const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
+    if (!sock) throw new Error("البوت غير متصل حالياً.");
+
+    let messageContent = {};
     const fileBuffer = fs.readFileSync(filePath);
 
     if (isAudio) {
         messageContent = { audio: fileBuffer, mimetype: mimetype || 'audio/ogg; codecs=opus', ptt: true };
-        logText = logText || 'رسالة صوتية 🎙️';
     } else if (isImage) {
         messageContent = { image: fileBuffer, caption: caption || undefined };
-        logText = caption ? `📷 صورة: ${caption}` : '📷 صورة';
     } else if (isVideo) {
         messageContent = { video: fileBuffer, caption: caption || undefined };
-        logText = caption ? `🎥 فيديو: ${caption}` : '🎥 فيديو';
     } else {
         const fileName = path.basename(filePath);
         messageContent = { document: fileBuffer, mimetype: mimetype || 'application/octet-stream', fileName: fileName, caption: caption || undefined };
-        logText = caption ? `📄 مستند: ${caption} (${fileName})` : `📄 مستند: ${fileName}`;
     }
 
     // تجهيز الرد المقتبس إن وجد (Quoted Reply)
-    let quotedMsg = null;
     let quoteOptions = undefined;
-    if (options && options.quotedMsgId) {
-        quotedMsg = await Message.findByPk(options.quotedMsgId);
-        if (quotedMsg && quotedMsg.messageId) {
-            quoteOptions = {
-                quoted: {
-                    key: {
-                        remoteJid: quotedMsg.remoteJid || remoteJid,
-                        fromMe: quotedMsg.role === 'model',
-                        id: quotedMsg.messageId
-                    },
-                    message: {
-                        conversation: quotedMsg.content || 'مرفق'
-                    }
+    if (quotedMsg && quotedMsg.messageId) {
+        quoteOptions = {
+            quoted: {
+                key: {
+                    remoteJid: quotedMsg.remoteJid || remoteJid,
+                    fromMe: quotedMsg.role === 'model',
+                    id: quotedMsg.messageId
+                },
+                message: {
+                    conversation: quotedMsg.content || 'مرفق'
                 }
-            };
-        }
+            }
+        };
     }
 
     // إشارة للحالة (recording / composing)
@@ -4239,21 +4382,6 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
         await sock.sendPresenceUpdate('paused', remoteJid);
     } catch (e) {}
 
-    let relativeUrl = filePath;
-    const publicDir = path.join(process.cwd(), 'public');
-    if (filePath.startsWith(publicDir)) {
-        relativeUrl = filePath.slice(publicDir.length).replace(/\\/g, '/');
-    } else if (filePath.includes('/uploads/') || filePath.includes('\\uploads\\')) {
-        const idx = filePath.search(/[\\/]uploads[\\/]/);
-        relativeUrl = filePath.substring(idx).replace(/\\/g, '/');
-    } else {
-        const lastPublic = filePath.lastIndexOf('public');
-        if (lastPublic !== -1) {
-            relativeUrl = filePath.substring(lastPublic + 6).replace(/\\/g, '/');
-        }
-    }
-    if (!relativeUrl.startsWith('/')) relativeUrl = '/' + relativeUrl;
-
     const savedMsg = await Message.create({
         UserId: userId,
         remoteJid,
@@ -4279,9 +4407,6 @@ export async function sendManualMediaMessage(userId, remoteJid, filePath, mimety
 }
 
 export async function sendReaction(userId, remoteJid, messageIdentifier, emoji) {
-    const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
-    if (!sock) throw new Error("البوت غير متصل حالياً.");
-
     let targetMsg = null;
     if (!isNaN(messageIdentifier)) {
         targetMsg = await Message.findByPk(messageIdentifier);
@@ -4294,11 +4419,33 @@ export async function sendReaction(userId, remoteJid, messageIdentifier, emoji) 
         throw new Error("لم يتم العثور على الرسالة المراد التفاعل معها.");
     }
 
+    const isGroup = remoteJid && remoteJid.endsWith('@g.us');
+    let metaReacted = false;
+
+    // 🌟 إرسال التفاعل عبر Meta WhatsApp Cloud API للمحادثات الفردية
+    if (!isGroup && targetMsg.messageId) {
+        try {
+            const { getMetaConfig, sendMetaReaction } = await import('../services/metaWhatsappService.js');
+            const metaConfig = await getMetaConfig(userId);
+            if (metaConfig.enabled && metaConfig.token && metaConfig.phoneNumberId) {
+                const res = await sendMetaReaction(remoteJid, targetMsg.messageId, emoji || '', { userId });
+                if (res?.success) metaReacted = true;
+            }
+        } catch (mErr) {
+            console.warn('Meta reaction error:', mErr);
+        }
+    }
+
+    const sock = sessions.get(parseInt(userId, 10)) || sessions.get(String(userId));
+    if (!sock && !metaReacted) {
+        throw new Error("البوت غير متصل حالياً.");
+    }
+
     const reactionText = emoji || "";
-    let waSent = false;
+    let waSent = metaReacted;
     let waError = null;
 
-    if (targetMsg.messageId) {
+    if (sock && targetMsg.messageId) {
         const reactionMessage = {
             react: {
                 text: reactionText,

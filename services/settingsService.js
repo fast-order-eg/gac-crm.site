@@ -194,6 +194,50 @@ export const defaultSettingsMeta = {
         category: 'general',
         label: 'مؤشر التوزيع (Round Robin)',
         defaultValue: 0
+    },
+
+    // إعدادات واتساب ميتا بيزنس كلاود (Meta WhatsApp Cloud API)
+    meta_whatsapp_enabled: {
+        type: 'boolean',
+        category: 'meta_whatsapp',
+        label: 'تفعيل واتساب ميتا بيزنس كلاود API',
+        defaultValue: true
+    },
+    meta_phone_number_id: {
+        type: 'text',
+        category: 'meta_whatsapp',
+        label: 'معرّف رقم الهاتف (Phone Number ID)',
+        defaultValue: '1452465954607485'
+    },
+    meta_waba_id: {
+        type: 'text',
+        category: 'meta_whatsapp',
+        label: 'معرّف حساب واتساب للأعمال (WABA ID)',
+        defaultValue: '1166724729014816'
+    },
+    meta_whatsapp_token: {
+        type: 'text',
+        category: 'meta_whatsapp',
+        label: 'رمز الوصول الدائم (System User Access Token)',
+        defaultValue: 'EAGPOauTuiMABS8t4epW190BdWfNgPRn31bGLoHbw9eWnUlZA3ZBF1IHtndneCqQppHzYMtZCxn2NcVJemfdSteatm7zUwFEY35oDOTR3dArcscUiN0FIinrO6QClEBqxfRHdfQSdKGoCEaT2JYdflGFmSn9qsAWQqROtS2wZB4ZAUGIPAemGE3PLTc1svIg5qdQZDZD'
+    },
+    meta_verify_token: {
+        type: 'text',
+        category: 'meta_whatsapp',
+        label: 'كود التحقق للويب هوك (Verify Token)',
+        defaultValue: 'gac_crm_meta_wh_2026'
+    },
+    meta_display_number: {
+        type: 'text',
+        category: 'meta_whatsapp',
+        label: 'رقم الهاتف المعروض',
+        defaultValue: '+20 10 35917094'
+    },
+    meta_app_secret: {
+        type: 'text',
+        category: 'meta_whatsapp',
+        label: 'سر التطبيق (App Secret)',
+        defaultValue: ''
     }
 };
 

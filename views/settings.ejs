@@ -116,6 +116,12 @@
                         التوقيتات والمدد
                     </button>
                 </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="meta-tab" data-bs-toggle="pill" data-bs-target="#meta-pane" type="button" role="tab" aria-controls="meta-pane" aria-selected="false">
+                        <i class="bi bi-whatsapp text-success"></i>
+                        واتساب ميتا بيزنس (Meta Cloud API)
+                    </button>
+                </li>
             </ul>
 
             <!-- Unified Form for all settings -->
@@ -251,6 +257,106 @@
                                         </button>
                                         <div id="checkGroupResult" class="mt-3 small rounded-3" style="display: none;"></div>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+                    <!-- 3. Meta WhatsApp Cloud API Tab -->
+                    <div class="tab-pane fade" id="meta-pane" role="tabpanel" aria-labelledby="meta-tab">
+                        <div class="d-flex align-items-center justify-content-between mb-3">
+                            <h5 class="section-title mb-0">🌐 إعدادات واتساب ميتا بيزنس الرسمي (WhatsApp Cloud API)</h5>
+                            <span class="badge bg-success-subtle text-success border border-success-subtle px-3 py-2 rounded-pill font-monospace">
+                                Official Cloud API v21.0
+                            </span>
+                        </div>
+                        
+                        <div class="alert alert-info border-0 shadow-sm rounded-4 mb-4 p-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            <div class="d-flex align-items-center">
+                                <i class="bi bi-shield-check fs-2 text-primary me-3"></i>
+                                <div>
+                                    <strong class="d-block text-dark">النظام الهجين (Hybrid WhatsApp):</strong>
+                                    <span class="small text-secondary">
+                                        يتم إرسال واستقبال رسائل العملاء الفردية عبر واتساب ميتا بيزنس (رقم رسمي، سرعة فائقة، حماية تامة من الحظر)، مع بقاء Baileys لجروبات التحكم والمبيعات.
+                                    </span>
+                                </div>
+                            </div>
+                            <button type="button" id="btnTestMetaConn" class="btn btn-outline-primary fw-bold rounded-pill px-3 py-2 shadow-sm" onclick="runMetaTestConnection()">
+                                <i class="bi bi-broadcast me-1"></i> فحص الاتصال بالـ API
+                            </button>
+                        </div>
+
+                        <div id="metaTestResult" class="mb-4" style="display:none;"></div>
+
+                        <input type="hidden" name="meta_whatsapp_form_submitted" value="true">
+
+                        <div class="card border-0 shadow-sm p-4 rounded-4 bg-light mb-4">
+                            <div class="form-check form-switch mb-4">
+                                <input class="form-check-input" type="checkbox" role="switch" id="meta_whatsapp_enabled" name="meta_whatsapp_enabled" value="true" <%= (settings.meta_whatsapp_enabled === true || settings.meta_whatsapp_enabled === 'true' || settings.meta_whatsapp_enabled === undefined) ? 'checked' : '' %>>
+                                <label class="form-check-label fw-bold text-dark fs-6" for="meta_whatsapp_enabled">
+                                    تفعيل قناة واتساب ميتا بيزنس كلاود (Meta Cloud API) كأساسي للمحادثات الفردية
+                                </label>
+                                <div class="small text-secondary mt-1">عند التعطيل، يعود النظام تلقائياً للإرسال عبر جلسة Baileys كالمعتاد.</div>
+                            </div>
+
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold text-secondary small">معرّف رقم الهاتف (Phone Number ID) <span class="text-danger">*</span></label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-telephone text-primary"></i></span>
+                                        <input type="text" name="meta_phone_number_id" id="meta_phone_number_id" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_phone_number_id || '1452465954607485' %>" required placeholder="مثال: 1452465954607485">
+                                    </div>
+                                    <div class="form-text small">معرف الرقم المخصص من صفحة API Setup في ميتا.</div>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold text-secondary small">معرّف حساب واتساب للأعمال (WABA ID) <span class="text-danger">*</span></label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-building text-primary"></i></span>
+                                        <input type="text" name="meta_waba_id" id="meta_waba_id" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_waba_id || '1166724729014816' %>" required placeholder="مثال: 1166724729014816">
+                                    </div>
+                                    <div class="form-text small">معرف حساب WhatsApp Business Account في مدير الأعمال.</div>
+                                </div>
+
+                                <div class="col-12">
+                                    <label class="form-label fw-bold text-secondary small">رمز الوصول الدائم (System User Access Token) <span class="text-danger">*</span></label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-key-fill text-warning"></i></span>
+                                        <textarea name="meta_whatsapp_token" id="meta_whatsapp_token" rows="3" class="form-control border-0 shadow-sm py-2 rounded-end-3 font-monospace small" required placeholder="EAGP..."><%= settings.meta_whatsapp_token || 'EAGPOauTuiMABS8t4epW190BdWfNgPRn31bGLoHbw9eWnUlZA3ZBF1IHtndneCqQppHzYMtZCxn2NcVJemfdSteatm7zUwFEY35oDOTR3dArcscUiN0FIinrO6QClEBqxfRHdfQSdKGoCEaT2JYdflGFmSn9qsAWQqROtS2wZB4ZAUGIPAemGE3PLTc1svIg5qdQZDZD' %></textarea>
+                                    </div>
+                                    <div class="form-text small">رمز النظام الدائم المولد من مدير الأعمال بصلاحيات whatsapp_business_messaging.</div>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold text-secondary small">رقم الهاتف المعروض</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-phone text-secondary"></i></span>
+                                        <input type="text" name="meta_display_number" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_display_number || '+20 10 35917094' %>" placeholder="+20 10 35917094">
+                                    </div>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold text-secondary small">كود التحقق للويب هوك (Verify Token)</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-shield-lock text-secondary"></i></span>
+                                        <input type="text" name="meta_verify_token" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_verify_token || 'gac_crm_meta_wh_2026' %>" placeholder="gac_crm_meta_wh_2026">
+                                    </div>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold text-secondary small">سر التطبيق (App Secret) - اختياري</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-lock text-secondary"></i></span>
+                                        <input type="password" name="meta_app_secret" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_app_secret || '' %>" placeholder="اختياري لتوثيق التوقيع">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mt-4 pt-3 border-top">
+                                <h6 class="fw-bold text-dark mb-2"><i class="bi bi-link-45deg me-1"></i> رابط الـ Webhook الخاص بك في ميتا:</h6>
+                                <div class="d-flex align-items-center justify-content-between bg-white rounded-3 p-3 border">
+                                    <code class="text-primary fs-6 font-monospace">https://gac-crm.site/webhook/whatsapp</code>
+                                    <button type="button" class="btn btn-sm btn-light border" onclick="navigator.clipboard.writeText('https://gac-crm.site/webhook/whatsapp'); alert('تم نسخ رابط الويب هوك بنجاح!')" title="نسخ الرابط">
+                                        <i class="far fa-copy"></i> نسخ
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -435,6 +541,59 @@
             }).catch(err => {
                 console.error('Failed to copy: ', err);
             });
+        }
+
+        // فحص الاتصال بسيرفرات ميتا كلاود API
+        async function runMetaTestConnection() {
+            const btn = document.getElementById('btnTestMetaConn');
+            const resBox = document.getElementById('metaTestResult');
+            if (!btn || !resBox) return;
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> جاري الفحص...';
+            resBox.style.display = 'none';
+
+            try {
+                const resp = await fetch('/dashboard/settings/test-meta-connection');
+                const data = await resp.json();
+
+                resBox.style.display = 'block';
+                if (data.success) {
+                    resBox.innerHTML = `
+                        <div class="alert alert-success border-0 shadow-sm rounded-4 p-3 d-flex align-items-center">
+                            <i class="bi bi-check-circle-fill fs-2 text-success me-3"></i>
+                            <div>
+                                <strong class="d-block text-success">الاتصال بواتساب ميتا بيزنس ناجح ومفعل! ✅</strong>
+                                <div class="small text-dark mt-1">
+                                    الاسم المعتمد: <strong>${data.data?.verifiedName || 'GAC Academy'}</strong> | 
+                                    رقم الهاتف: <strong>${data.data?.displayPhoneNumber || '+20 10 35917094'}</strong> | 
+                                    الحالة: <strong>${data.data?.status || 'VERIFIED'}</strong>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    resBox.innerHTML = `
+                        <div class="alert alert-danger border-0 shadow-sm rounded-4 p-3 d-flex align-items-center">
+                            <i class="bi bi-x-circle-fill fs-2 text-danger me-3"></i>
+                            <div>
+                                <strong class="d-block text-danger">فشل الاتصال بواتساب ميتا:</strong>
+                                <span class="small text-dark d-block mt-1">${data.message || 'تأكد من صحة التوكن ومعرف الرقم.'}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch (e) {
+                resBox.style.display = 'block';
+                resBox.innerHTML = `
+                    <div class="alert alert-danger border-0 shadow-sm rounded-4 p-3">
+                        خطأ أثناء الفحص: ${e.message}
+                    </div>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-broadcast me-1"></i> فحص الاتصال بالـ API';
+            }
         }
     </script>
 </body>
