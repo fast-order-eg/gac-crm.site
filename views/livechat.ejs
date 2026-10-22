@@ -1128,6 +1128,17 @@
         const durEl = player.querySelector('.voice-duration');
         if (durEl && audioEl.duration && !isNaN(audioEl.duration) && isFinite(audioEl.duration)) {
             durEl.textContent = formatVoiceTime(audioEl.duration);
+            durEl.dataset.set = 'true';
+        }
+    }
+
+    function handleVoiceError(audioEl) {
+        console.warn('Voice playback source error:', audioEl.src || audioEl.currentSrc);
+        const player = audioEl.closest('.voice-player');
+        if (!player) return;
+        const btnIcon = player.querySelector('.voice-play-btn i');
+        if (btnIcon && !btnIcon.classList.contains('bi-pause-fill')) {
+            btnIcon.className = 'bi bi-play-fill';
         }
     }
 
@@ -1147,12 +1158,22 @@
                     if (otherBtn) otherBtn.className = 'bi bi-play-fill';
                 }
             }
-            audio.play().then(() => {
-                currentlyPlayingAudio = audio;
-                btn.querySelector('i').className = 'bi bi-pause-fill';
-            }).catch(err => {
-                console.error('Audio play error:', err);
-            });
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    currentlyPlayingAudio = audio;
+                    btn.querySelector('i').className = 'bi bi-pause-fill';
+                }).catch(err => {
+                    console.error('Audio play error:', err);
+                    const icon = btn.querySelector('i');
+                    if (icon) {
+                        icon.className = 'bi bi-exclamation-triangle text-warning';
+                        setTimeout(() => {
+                            if (audio.paused) icon.className = 'bi bi-play-fill';
+                        }, 2500);
+                    }
+                });
+            }
         } else {
             audio.pause();
             btn.querySelector('i').className = 'bi bi-play-fill';
@@ -1248,6 +1269,7 @@
             const isVideo = ['mp4', 'webm', 'mov'].includes(ext) || (txt && (txt.includes('فيديو') || txt.includes('vid')));
 
             if (isAudio) {
+                const mp3Url = cleanUrl.endsWith('.ogg') ? cleanUrl.replace(/\.ogg$/, '.mp3') : cleanUrl;
                 contentHtml += `
                     <div class="voice-player" dir="ltr">
                         <button type="button" class="voice-play-btn" onclick="toggleVoicePlay(this)" title="تشغيل / إيقاف الفويس">
@@ -1260,7 +1282,10 @@
                                 <span class="voice-duration">🎙️ فويس</span>
                             </div>
                         </div>
-                        <audio src="${cleanUrl}" preload="metadata" onloadedmetadata="initVoiceAudio(this)" ontimeupdate="updateVoiceAudio(this)" onended="resetVoiceAudio(this)"></audio>
+                        <audio preload="metadata" onloadedmetadata="initVoiceAudio(this)" ondurationchange="initVoiceAudio(this)" ontimeupdate="updateVoiceAudio(this)" onended="resetVoiceAudio(this)" onerror="handleVoiceError(this)">
+                            <source src="${mp3Url}" type="audio/mpeg">
+                            ${cleanUrl !== mp3Url ? `<source src="${cleanUrl}" type="audio/ogg">` : ''}
+                        </audio>
                     </div>
                 `;
             } else if (isImage) {

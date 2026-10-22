@@ -381,11 +381,41 @@ async function extractMessageDetails(msg, userId, sock) {
                 { logger: sock.logger, reuploadRequest: sock.updateMediaMessage }
             );
             const isMp4 = messageObj.audioMessage?.mimetype?.includes('mp4');
-            const ext = isMp4 ? 'm4a' : 'ogg';
-            const audioFileName = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
-            const audioPath = path.join(mediaDir, audioFileName);
-            fs.writeFileSync(audioPath, audioBuffer);
-            mediaUrl = `/uploads/media/${userId}/${audioFileName}`;
+            const baseAudioName = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+            if (isMp4) {
+                const audioFileName = `${baseAudioName}.m4a`;
+                const audioPath = path.join(mediaDir, audioFileName);
+                fs.writeFileSync(audioPath, audioBuffer);
+                mediaUrl = `/uploads/media/${userId}/${audioFileName}`;
+            } else {
+                // تحويل فوري لـ MP3 لضمان التشغيل على جميع أجهزة الموبايل (iOS Safari و Android)
+                const tempInput = path.join(os.tmpdir(), `temp_in_${Date.now()}_${Math.floor(Math.random() * 1000)}.ogg`);
+                const mp3FileName = `${baseAudioName}.mp3`;
+                const mp3Path = path.join(mediaDir, mp3FileName);
+                try {
+                    fs.writeFileSync(tempInput, audioBuffer);
+                    await new Promise((resolve, reject) => {
+                        ffmpeg(tempInput)
+                            .toFormat('mp3')
+                            .audioCodec('libmp3lame')
+                            .audioBitrate(128)
+                            .on('end', resolve)
+                            .on('error', reject)
+                            .save(mp3Path);
+                    });
+                    mediaUrl = `/uploads/media/${userId}/${mp3FileName}`;
+                } catch (convErr) {
+                    console.error("FFmpeg mp3 conversion failed, saving fallback ogg:", convErr);
+                    const oggFileName = `${baseAudioName}.ogg`;
+                    fs.writeFileSync(path.join(mediaDir, oggFileName), audioBuffer);
+                    mediaUrl = `/uploads/media/${userId}/${oggFileName}`;
+                } finally {
+                    if (fs.existsSync(tempInput)) {
+                        try { fs.unlinkSync(tempInput); } catch (e) {}
+                    }
+                }
+            }
         } catch (mediaSaveErr) {
             console.error("Error saving audio message:", mediaSaveErr);
         }
