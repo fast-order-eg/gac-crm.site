@@ -18,7 +18,7 @@ export async function getMetaConfig(userId = 1) {
     const defaultPhoneId = '1452465954607485';
     const defaultWabaId = '1166724729014816';
     const defaultVerifyToken = 'gac_crm_meta_wh_2026';
-    const defaultDisplayNumber = '+20 10 35917094';
+    const defaultDisplayNumber = '+201035917094';
 
     try {
         const enabledDb = await getSetting('meta_whatsapp_enabled', userId);
@@ -35,7 +35,7 @@ export async function getMetaConfig(userId = 1) {
             wabaId: wabaIdDb || process.env.META_WABA_ID || defaultWabaId,
             token: tokenDb || process.env.META_WHATSAPP_TOKEN || defaultToken,
             verifyToken: verifyTokenDb || process.env.META_VERIFY_TOKEN || defaultVerifyToken,
-            displayNumber: displayNumberDb || defaultDisplayNumber,
+            displayNumber: (displayNumberDb || defaultDisplayNumber).replace(/\s+/g, ''),
             appSecret: appSecretDb || process.env.META_APP_SECRET || ''
         };
     } catch (err) {

@@ -304,7 +304,7 @@
                                     <label class="form-label fw-bold text-secondary small">معرّف رقم الهاتف (Phone Number ID) <span class="text-danger">*</span></label>
                                     <div class="input-group">
                                         <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-telephone text-primary"></i></span>
-                                        <input type="text" name="meta_phone_number_id" id="meta_phone_number_id" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_phone_number_id || '1452465954607485' %>" required placeholder="مثال: 1452465954607485">
+                                        <input type="text" name="meta_phone_number_id" id="meta_phone_number_id" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" dir="ltr" style="direction: ltr; text-align: left;" value="<%= settings.meta_phone_number_id || '1452465954607485' %>" required placeholder="مثال: 1452465954607485">
                                     </div>
                                     <div class="form-text small">معرف الرقم المخصص من صفحة API Setup في ميتا.</div>
                                 </div>
@@ -313,7 +313,7 @@
                                     <label class="form-label fw-bold text-secondary small">معرّف حساب واتساب للأعمال (WABA ID) <span class="text-danger">*</span></label>
                                     <div class="input-group">
                                         <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-building text-primary"></i></span>
-                                        <input type="text" name="meta_waba_id" id="meta_waba_id" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_waba_id || '1166724729014816' %>" required placeholder="مثال: 1166724729014816">
+                                        <input type="text" name="meta_waba_id" id="meta_waba_id" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" dir="ltr" style="direction: ltr; text-align: left;" value="<%= settings.meta_waba_id || '1166724729014816' %>" required placeholder="مثال: 1166724729014816">
                                     </div>
                                     <div class="form-text small">معرف حساب WhatsApp Business Account في مدير الأعمال.</div>
                                 </div>
@@ -322,7 +322,7 @@
                                     <label class="form-label fw-bold text-secondary small">رمز الوصول الدائم (System User Access Token) <span class="text-danger">*</span></label>
                                     <div class="input-group">
                                         <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-key-fill text-warning"></i></span>
-                                        <textarea name="meta_whatsapp_token" id="meta_whatsapp_token" rows="3" class="form-control border-0 shadow-sm py-2 rounded-end-3 font-monospace small" required placeholder="EAGP..."><%= settings.meta_whatsapp_token || 'EAGPOauTuiMABS8t4epW190BdWfNgPRn31bGLoHbw9eWnUlZA3ZBF1IHtndneCqQppHzYMtZCxn2NcVJemfdSteatm7zUwFEY35oDOTR3dArcscUiN0FIinrO6QClEBqxfRHdfQSdKGoCEaT2JYdflGFmSn9qsAWQqROtS2wZB4ZAUGIPAemGE3PLTc1svIg5qdQZDZD' %></textarea>
+                                        <textarea name="meta_whatsapp_token" id="meta_whatsapp_token" rows="3" class="form-control border-0 shadow-sm py-2 rounded-end-3 font-monospace small" dir="ltr" style="direction: ltr; text-align: left;" required placeholder="EAGP..."><%= settings.meta_whatsapp_token || 'EAGPOauTuiMABS8t4epW190BdWfNgPRn31bGLoHbw9eWnUlZA3ZBF1IHtndneCqQppHzYMtZCxn2NcVJemfdSteatm7zUwFEY35oDOTR3dArcscUiN0FIinrO6QClEBqxfRHdfQSdKGoCEaT2JYdflGFmSn9qsAWQqROtS2wZB4ZAUGIPAemGE3PLTc1svIg5qdQZDZD' %></textarea>
                                     </div>
                                     <div class="form-text small">رمز النظام الدائم المولد من مدير الأعمال بصلاحيات whatsapp_business_messaging.</div>
                                 </div>
@@ -331,7 +331,7 @@
                                     <label class="form-label fw-bold text-secondary small">رقم الهاتف المعروض</label>
                                     <div class="input-group">
                                         <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-phone text-secondary"></i></span>
-                                        <input type="text" name="meta_display_number" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_display_number || '+20 10 35917094' %>" placeholder="+20 10 35917094">
+                                        <input type="text" name="meta_display_number" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" dir="ltr" style="direction: ltr; text-align: left;" oninput="this.value = this.value.replace(/\s+/g, '')" value="<%= (settings.meta_display_number || '+201035917094').replace(/\s+/g, '') %>" placeholder="+201035917094">
                                     </div>
                                 </div>
 
@@ -339,7 +339,7 @@
                                     <label class="form-label fw-bold text-secondary small">كود التحقق للويب هوك (Verify Token)</label>
                                     <div class="input-group">
                                         <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-shield-lock text-secondary"></i></span>
-                                        <input type="text" name="meta_verify_token" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_verify_token || 'gac_crm_meta_wh_2026' %>" placeholder="gac_crm_meta_wh_2026">
+                                        <input type="text" name="meta_verify_token" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" dir="ltr" style="direction: ltr; text-align: left;" value="<%= settings.meta_verify_token || 'gac_crm_meta_wh_2026' %>" placeholder="gac_crm_meta_wh_2026">
                                     </div>
                                 </div>
 
@@ -347,7 +347,7 @@
                                     <label class="form-label fw-bold text-secondary small">سر التطبيق (App Secret) - اختياري</label>
                                     <div class="input-group">
                                         <span class="input-group-text bg-white border-0 shadow-sm"><i class="bi bi-lock text-secondary"></i></span>
-                                        <input type="password" name="meta_app_secret" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" value="<%= settings.meta_app_secret || '' %>" placeholder="اختياري لتوثيق التوقيع">
+                                        <input type="password" name="meta_app_secret" class="form-control border-0 shadow-sm py-2.5 rounded-end-3 font-monospace" dir="ltr" style="direction: ltr; text-align: left;" value="<%= settings.meta_app_secret || '' %>" placeholder="اختياري لتوثيق التوقيع">
                                     </div>
                                 </div>
                             </div>
@@ -577,7 +577,7 @@
                                 <strong class="d-block text-success">الاتصال بواتساب ميتا بيزنس ناجح ومفعل! ✅</strong>
                                 <div class="small text-dark mt-1">
                                     الاسم المعتمد: <strong>${data.data?.verifiedName || 'GAC Academy'}</strong> | 
-                                    رقم الهاتف: <strong>${data.data?.displayPhoneNumber || '+20 10 35917094'}</strong> | 
+                                    رقم الهاتف: <strong dir="ltr" style="direction: ltr; display: inline-block;">${(data.data?.displayPhoneNumber || '+201035917094').replace(/\s+/g, '')}</strong> | 
                                     الحالة: <strong>${data.data?.status || 'VERIFIED'}</strong>
                                 </div>
                             </div>

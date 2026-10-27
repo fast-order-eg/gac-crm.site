@@ -231,7 +231,7 @@ export const defaultSettingsMeta = {
         type: 'text',
         category: 'meta_whatsapp',
         label: 'رقم الهاتف المعروض',
-        defaultValue: '+20 10 35917094'
+        defaultValue: '+201035917094'
     },
     meta_app_secret: {
         type: 'text',
@@ -346,12 +346,18 @@ export async function getSetting(key, userId) {
             UserId: userId
         });
 
-        const parsedVal = parseValue(defaultValue, type);
+        let parsedVal = parseValue(defaultValue, type);
+        if (key === 'meta_display_number' && parsedVal) {
+            parsedVal = String(parsedVal).replace(/\s+/g, '');
+        }
         cache.set(cacheKey, parsedVal);
         return parsedVal;
     }
 
-    const parsedVal = parseValue(setting.settingValue, setting.settingType);
+    let parsedVal = parseValue(setting.settingValue, setting.settingType);
+    if (key === 'meta_display_number' && parsedVal) {
+        parsedVal = String(parsedVal).replace(/\s+/g, '');
+    }
     cache.set(cacheKey, parsedVal);
     return parsedVal;
 }
@@ -368,6 +374,9 @@ export async function getSettings(category, userId) {
 
 // Set/Update single setting
 export async function setSetting(key, value, userId) {
+    if (key === 'meta_display_number' && value) {
+        value = String(value).replace(/\s+/g, '');
+    }
     const meta = defaultSettingsMeta[key] || { type: 'text', category: 'general', label: key };
     let stringValue = value;
     let parsedValue = value;

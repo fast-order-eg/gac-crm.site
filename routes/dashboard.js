@@ -2321,6 +2321,10 @@ router.post('/settings/update', async (req, res) => {
             await setSetting('meta_whatsapp_enabled', isMetaEnabled, userId);
         }
 
+        if (updates.meta_display_number && typeof updates.meta_display_number === 'string') {
+            updates.meta_display_number = updates.meta_display_number.replace(/\s+/g, '');
+        }
+
         for (const [key, value] of Object.entries(updates)) {
             if (readOnlyKeys.includes(key)) {
                 continue;
