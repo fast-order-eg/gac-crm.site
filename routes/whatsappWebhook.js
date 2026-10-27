@@ -69,7 +69,7 @@ async function handleWebhookPost(req, res) {
                     for (const st of value.statuses) {
                         const mid = st.id;
                         const status = st.status; // sent, delivered, read, failed
-                        if (mid && status) {
+                        if (mid && status && ['sent', 'delivered', 'read'].includes(status)) {
                             try {
                                 await Message.update({ status }, { where: { messageId: mid } });
                             } catch (e) {}
@@ -233,7 +233,7 @@ async function processIncomingMetaMessage(msg, contacts = [], io = null) {
             quotedMsgId,
             quotedContent,
             quotedSender,
-            status: 'received'
+            status: 'read'
         });
 
         // 6. تحديث أو إنشاء المحادثة (Conversation)
