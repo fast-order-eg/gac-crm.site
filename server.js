@@ -110,8 +110,8 @@ const limiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => {
-        // استثناء لوحة التحكم واللايف شات والوسائط وفحص الصحة
-        return req.path.startsWith('/dashboard') || req.path.startsWith('/health') || req.path.startsWith('/uploads') || req.path.startsWith('/public');
+        // استثناء لوحة التحكم واللايف شات والوسائط وفحص الصحة والويب هوك
+        return req.path.startsWith('/dashboard') || req.path.startsWith('/health') || req.path.startsWith('/uploads') || req.path.startsWith('/public') || req.path.startsWith('/webhook');
     }
 });
 app.use(limiter);

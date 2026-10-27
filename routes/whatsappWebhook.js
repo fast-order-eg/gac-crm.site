@@ -41,6 +41,7 @@ router.get('/webhook/whatsapp', async (req, res) => {
 
 // POST: استقبال ومعالجة أحداث ورسائل الواتساب من ميتا (Webhook Events)
 router.post('/webhook/whatsapp', async (req, res) => {
+    console.log('📩 [Meta Webhook POST Received]:', JSON.stringify(req.body));
     // 1. الرد الفوري بـ 200 لتجنب إعادة المحاولات من سيرفرات ميتا
     res.sendStatus(200);
 

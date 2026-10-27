@@ -76,6 +76,19 @@ export async function testMetaConnection(configOverride = null) {
             };
         }
 
+        // التأكد التلقائي من ربط واشتراك حساب WABA بالتطبيق لاستقبال رسائل الويب هوك
+        let wabaSubscribed = false;
+        if (config.wabaId) {
+            try {
+                const subUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${config.wabaId}/subscribed_apps?access_token=${config.token}`;
+                const subResp = await fetch(subUrl, { method: 'POST' });
+                const subData = await subResp.json();
+                wabaSubscribed = subData.success === true;
+            } catch (subErr) {
+                console.warn('⚠️ [Meta WABA Auto-Subscribe Warn]:', subErr.message);
+            }
+        }
+
         return {
             success: true,
             message: 'تم الاتصال بسيرفرات ميتا بنجاح!',
@@ -84,7 +97,8 @@ export async function testMetaConnection(configOverride = null) {
                 verifiedName: data.verified_name || data.display_phone_number,
                 displayPhoneNumber: data.display_phone_number,
                 qualityRating: data.quality_rating,
-                status: data.code_verification_status
+                status: data.code_verification_status,
+                wabaSubscribed
             }
         };
     } catch (err) {
