@@ -5,6 +5,7 @@ import Customer from '../models/Customer.js';
 import Conversation from '../models/Conversation.js';
 import Message from '../models/Message.js';
 import User from '../models/User.js';
+import SystemSettings from '../models/SystemSettings.js';
 import { Op } from 'sequelize';
 import { assignCustomerToSales } from '../services/assignmentService.js';
 import { createNotification } from '../services/notificationService.js';
@@ -304,8 +305,23 @@ async function processIncomingMetaMessage(msg, contacts = [], io = null) {
         }
 
         // 10. الرد الآلي للعميل عبر واتساب ميتا بيزنس (Auto-Reply)
-        const isBotActive = customer.isBotActive !== false && !customer.isManualOverride && !conv.is_handoff;
-        if (isBotActive && text && text.trim().length > 0) {
+        // التحقق أولاً من زر تعطيل ردود الأزرار والردود الآلية بالكامل من لوحة التحكم (buttons_disabled)
+        let isGlobalDisabled = false;
+        try {
+            const sysSetting = await SystemSettings.findOne({ where: { settingKey: 'buttons_disabled' } });
+            if (sysSetting && (sysSetting.settingValue === 'true' || sysSetting.settingValue === '1')) {
+                isGlobalDisabled = true;
+            }
+            if (!isGlobalDisabled) {
+                const adminDisabled = await User.findOne({ where: { role: ['admin', 'super_admin'], buttons_disabled: true } });
+                if (adminDisabled) isGlobalDisabled = true;
+            }
+        } catch (e) {}
+
+        const isBotActive = !isGlobalDisabled && customer.isBotActive !== false && !customer.isManualOverride && !conv.is_handoff;
+        if (isGlobalDisabled) {
+            console.log(`⏸️ [WhatsApp Meta Auto-Reply] Bot auto-reply is DISABLED globally via buttons_disabled switch. Leaving conversation for human staff.`);
+        } else if (isBotActive && text && text.trim().length > 0) {
             try {
                 const welcomeMsg = await getSetting('welcome_message', targetUserId);
                 const modelCount = await Message.count({ where: { UserId: targetUserId, remoteJid, role: 'model' } });
