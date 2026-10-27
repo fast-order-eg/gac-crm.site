@@ -6,6 +6,15 @@ router.get('/', (req, res) => {
     res.redirect('/login');
 });
 
+// Public Privacy Policy & Terms of Service for Meta App Review and public access
+router.get(['/privacy', '/privacy-policy'], (req, res) => {
+    res.render('public_privacy');
+});
+
+router.get(['/terms', '/terms-of-service'], (req, res) => {
+    res.render('public_terms');
+});
+
 router.get('/login', (req, res) => {
     res.render('login', { message: req.flash('error') });
 });
