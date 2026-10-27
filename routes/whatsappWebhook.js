@@ -11,8 +11,8 @@ import { createNotification } from '../services/notificationService.js';
 
 const router = express.Router();
 
-// GET: دالة التحقق من الويب هوك المطلوبة من ميتا (Webhook Verification)
-router.get('/webhook/whatsapp', async (req, res) => {
+// Helper: دالة التحقق من الويب هوك المطلوبة من ميتا (Webhook Verification)
+async function verifyWebhookHandler(req, res) {
     try {
         const mode = req.query['hub.mode'];
         const token = req.query['hub.verify_token'];
@@ -24,7 +24,7 @@ router.get('/webhook/whatsapp', async (req, res) => {
             if (dbToken) configuredToken = dbToken;
         } catch (e) {}
 
-        const isValidToken = token === 'gac_crm_meta_wh_2026' || (configuredToken && token === configuredToken);
+        const isValidToken = token === 'gac_crm_meta_wh_2026' || token === 'fastorder_meta_verify_2026' || (configuredToken && token === configuredToken);
 
         if (mode === 'subscribe' && isValidToken) {
             console.log('✅ [WhatsApp Webhook] Verified successfully with Meta challenge!');
@@ -37,10 +37,14 @@ router.get('/webhook/whatsapp', async (req, res) => {
         console.error('❌ [WhatsApp Webhook] Verification error:', err);
         return res.status(500).send('Internal Server Error');
     }
-});
+}
 
-// POST: استقبال ومعالجة أحداث ورسائل الواتساب من ميتا (Webhook Events)
-router.post('/webhook/whatsapp', async (req, res) => {
+// GET: دعم كلا المسارين (/webhook/whatsapp و /api/whatsapp/meta-webhook مثل crm.fast-order-eg.tech)
+router.get('/webhook/whatsapp', verifyWebhookHandler);
+router.get('/api/whatsapp/meta-webhook', verifyWebhookHandler);
+
+// POST: دالة استقبال ومعالجة أحداث ورسائل الواتساب من ميتا (Webhook Events)
+async function handleWebhookPost(req, res) {
     console.log('📩 [Meta Webhook POST Received]:', JSON.stringify(req.body));
     // 1. الرد الفوري بـ 200 لتجنب إعادة المحاولات من سيرفرات ميتا
     res.sendStatus(200);
@@ -84,7 +88,11 @@ router.post('/webhook/whatsapp', async (req, res) => {
     } catch (err) {
         console.error('❌ [WhatsApp Cloud Webhook] Global processing error:', err);
     }
-});
+}
+
+// POST: دعم كلا المسارين
+router.post('/webhook/whatsapp', handleWebhookPost);
+router.post('/api/whatsapp/meta-webhook', handleWebhookPost);
 
 /**
  * معالجة رسالة واردة واحدة من واتساب ميتا كلاود
@@ -293,6 +301,64 @@ async function processIncomingMetaMessage(msg, contacts = [], io = null) {
             });
         } catch (notifErr) {
             console.error('Error creating notification:', notifErr);
+        }
+
+        // 10. الرد الآلي للعميل عبر واتساب ميتا بيزنس (Auto-Reply)
+        const isBotActive = customer.isBotActive !== false && !customer.isManualOverride && !conv.is_handoff;
+        if (isBotActive && text && text.trim().length > 0) {
+            try {
+                const welcomeMsg = await getSetting('welcome_message', targetUserId);
+                const modelCount = await Message.count({ where: { UserId: targetUserId, remoteJid, role: 'model' } });
+
+                let botReplyText = null;
+                if (modelCount === 0 && welcomeMsg) {
+                    botReplyText = welcomeMsg;
+                } else {
+                    const cleanUserText = text.trim().toLowerCase();
+                    if (['1', '2', '3', '4'].includes(cleanUserText)) {
+                        const courseDetails = await getSetting('course_details', targetUserId);
+                        botReplyText = courseDetails || 'شكراً لاختيارك! تفاصيل ومواعيد الكورس سنرسلها لك في الرسالة التالية.';
+                    } else if (cleanUserText.includes('تفاصيل') || cleanUserText.includes('سعر') || cleanUserText.includes('كام')) {
+                        const courseDetails = await getSetting('course_details', targetUserId);
+                        botReplyText = courseDetails || welcomeMsg;
+                    } else {
+                        // رد ترحيبي ذكي بالافتراض
+                        botReplyText = welcomeMsg || 'أهلاً بك! نسعد بتواصلك معنا، كيف يمكننا مساعدتك اليوم؟ 😊';
+                    }
+                }
+
+                if (botReplyText) {
+                    await sendMetaTextMessage(remoteJid, botReplyText, { userId: targetUserId });
+                    const savedBotMsg = await Message.create({
+                        UserId: targetUserId,
+                        remoteJid,
+                        role: 'model',
+                        content: botReplyText,
+                        status: 'sent'
+                    });
+
+                    conv.lastMessage = botReplyText;
+                    conv.lastMessageText = botReplyText;
+                    conv.lastMessageTime = new Date();
+                    conv.lastMessageAt = new Date();
+                    await conv.save();
+
+                    if (io) {
+                        const botPayload = {
+                            ...savedBotMsg.toJSON(),
+                            phoneNumber: customer.phoneNumber || senderPhone,
+                            customerName: customer.customerName || senderPhone
+                        };
+                        io.to('crm_staff').emit('new_message', botPayload);
+                        if (targetUserId) {
+                            io.to(`user_${targetUserId}`).emit('new_message', botPayload);
+                        }
+                    }
+                    console.log(`🤖 [WhatsApp Meta Auto-Reply Sent] To ${senderPhone}: "${botReplyText.substring(0, 30)}..."`);
+                }
+            } catch (autoReplyErr) {
+                console.error('⚠️ [Meta Auto-Reply Error]:', autoReplyErr);
+            }
         }
 
         console.log(`💬 [WhatsApp Meta Message Handled] From: ${customer.customerName} (${senderPhone}): "${text}"`);
